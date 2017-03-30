@@ -201,7 +201,7 @@ void ProcessPage_OnEndProcessTree(void)
     
     CloseHandle(snapshot);
 
-    for(i = 0; i <= list->last; ++i) {
+    for(i = 0; i < list->count; ++i) {
         hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, list->pid[i]);        
 
         if (!hProcess)
