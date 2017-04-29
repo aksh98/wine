@@ -27,6 +27,7 @@
 #include "shobjidl.h"
 #include "shlobj.h"
 #include "shellapi.h"
+#include "commoncontrols.h"
 #include "wine/test.h"
 
 #include "shell32_test.h"
@@ -1159,6 +1160,8 @@ static void test_ExtractIcon(void)
     char path[MAX_PATH];
     HANDLE file;
     int r;
+    ICONINFO info;
+    BITMAP bm;
 
     /* specified instance handle */
     hicon = ExtractIconA(GetModuleHandleA("shell32.dll"), NULL, 0);
@@ -1214,6 +1217,10 @@ if (0)
     /* existing index */
     hicon = ExtractIconW(NULL, shell32W, 0);
     ok(hicon != NULL && HandleToLong(hicon) != -1, "Got icon %p\n", hicon);
+    GetIconInfo(hicon, &info);
+    GetObjectW(info.hbmColor, sizeof(bm), &bm);
+    ok(bm.bmWidth == GetSystemMetrics(SM_CXICON), "got %d\n", bm.bmWidth);
+    ok(bm.bmHeight == GetSystemMetrics(SM_CYICON), "got %d\n", bm.bmHeight);
     DestroyIcon(hicon);
 
     /* returns number of resources */
@@ -1297,6 +1304,44 @@ todo_wine {
     DestroyIcon(hicon);
 }
 
+static void test_SHGetImageList(void)
+{
+    HRESULT hr;
+    IImageList *list, *list2;
+    BOOL ret;
+    HIMAGELIST lg, sm;
+    ULONG start_refs, refs;
+
+    hr = SHGetImageList( SHIL_LARGE, &IID_IImageList, (void **)&list );
+    ok( hr == S_OK, "got %08x\n", hr );
+    start_refs = IImageList_AddRef( list );
+    IImageList_Release( list );
+
+    hr = SHGetImageList( SHIL_LARGE, &IID_IImageList, (void **)&list2 );
+    ok( hr == S_OK, "got %08x\n", hr );
+    ok( list == list2, "lists differ\n" );
+    refs = IImageList_AddRef( list );
+    IImageList_Release( list );
+    ok( refs == start_refs + 1, "got %d, start_refs %d\n", refs, start_refs );
+    IImageList_Release( list2 );
+
+    hr = SHGetImageList( SHIL_SMALL, &IID_IImageList, (void **)&list2 );
+    ok( hr == S_OK, "got %08x\n", hr );
+
+    ret = Shell_GetImageLists( &lg, &sm );
+    ok( ret, "got %d\n", ret );
+    ok( lg == (HIMAGELIST)list, "mismatch\n" );
+    ok( sm == (HIMAGELIST)list2, "mismatch\n" );
+
+    /* Shell_GetImageLists doesn't take a reference */
+    refs = IImageList_AddRef( list );
+    IImageList_Release( list );
+    ok( refs == start_refs, "got %d, start_refs %d\n", refs, start_refs );
+
+    IImageList_Release( list2 );
+    IImageList_Release( list );
+}
+
 START_TEST(shelllink)
 {
     HRESULT r;
@@ -1327,6 +1372,7 @@ START_TEST(shelllink)
     test_propertystore();
     test_ExtractIcon();
     test_ExtractAssociatedIcon();
+    test_SHGetImageList();
 
     CoUninitialize();
 }

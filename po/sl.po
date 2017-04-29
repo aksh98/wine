@@ -7682,7 +7682,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr "Vstavi vsebino odložišča v vaš dokument."
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr "Neznana vrsta"
 
@@ -12333,6 +12333,12 @@ msgstr "Napaka: sistem ni našel navedenega ključa ali vrednosti registra\n"
 #| msgid "Error: Unable to add keys to remote machine\n"
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "Napaka: ni mogoče dodati ključa na oddaljen računalnik\n"
+
+#: regedit.rc:398
+#, fuzzy
+#| msgid "No command was specified."
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr "Ukaz ni bil naveden."
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

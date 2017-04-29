@@ -31,10 +31,10 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
-typedef struct {
+struct HTMLFrameElement {
     HTMLFrameBase framebase;
     IHTMLFrameElement3 IHTMLFrameElement3_iface;
-} HTMLFrameElement;
+};
 
 static inline HTMLFrameElement *impl_from_IHTMLFrameElement3(IHTMLFrameElement3 *iface)
 {
@@ -287,6 +287,7 @@ static void HTMLFrameElement_unlink(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLFrameElementImplVtbl = {
+    &CLSID_HTMLFrameElement,
     HTMLFrameElement_QI,
     HTMLFrameElement_destructor,
     HTMLElement_cpc,

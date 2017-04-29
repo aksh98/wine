@@ -346,12 +346,13 @@ NTSTATUS WINAPI NtCreateFile( PHANDLE handle, ACCESS_MASK access, POBJECT_ATTRIB
  *                  Asynchronous file I/O                              *
  */
 
+typedef NTSTATUS async_callback_t( void *user, IO_STATUS_BLOCK *io, NTSTATUS status );
+
 struct async_fileio
 {
+    async_callback_t    *callback; /* must be the first field */
     struct async_fileio *next;
     HANDLE               handle;
-    PIO_APC_ROUTINE      apc;
-    void                *apc_arg;
 };
 
 struct async_fileio_read
@@ -391,7 +392,7 @@ static void release_fileio( struct async_fileio *io )
     }
 }
 
-static struct async_fileio *alloc_fileio( DWORD size, HANDLE handle, PIO_APC_ROUTINE apc, void *arg )
+static struct async_fileio *alloc_fileio( DWORD size, async_callback_t callback, HANDLE handle )
 {
     /* first free remaining previous fileinfos */
 
@@ -406,15 +407,27 @@ static struct async_fileio *alloc_fileio( DWORD size, HANDLE handle, PIO_APC_ROU
 
     if ((io = RtlAllocateHeap( GetProcessHeap(), 0, size )))
     {
-        io->handle  = handle;
-        io->apc     = apc;
-        io->apc_arg = arg;
+        io->callback = callback;
+        io->handle   = handle;
     }
     return io;
 }
 
+static async_data_t server_async( HANDLE handle, struct async_fileio *user, HANDLE event,
+                                  PIO_APC_ROUTINE apc, void *apc_context, IO_STATUS_BLOCK *io )
+{
+    async_data_t async;
+    async.handle      = wine_server_obj_handle( handle );
+    async.user        = wine_server_client_ptr( user );
+    async.iosb        = wine_server_client_ptr( io );
+    async.event       = wine_server_obj_handle( event );
+    async.apc         = wine_server_client_ptr( apc );
+    async.apc_context = wine_server_client_ptr( apc_context );
+    return async;
+}
+
 /* callback for irp async I/O completion */
-static NTSTATUS irp_completion( void *user, IO_STATUS_BLOCK *io, NTSTATUS status, void **apc, void **arg )
+static NTSTATUS irp_completion( void *user, IO_STATUS_BLOCK *io, NTSTATUS status )
 {
     struct async_irp *async = user;
     ULONG information = 0;
@@ -434,8 +447,6 @@ static NTSTATUS irp_completion( void *user, IO_STATUS_BLOCK *io, NTSTATUS status
     {
         io->u.Status = status;
         io->Information = information;
-        *apc = async->io.apc;
-        *arg = async->io.apc_arg;
         release_fileio( &async->io );
     }
     return status;
@@ -493,8 +504,7 @@ NTSTATUS FILE_GetNtStatus(void)
 /***********************************************************************
  *             FILE_AsyncReadService      (INTERNAL)
  */
-static NTSTATUS FILE_AsyncReadService( void *user, IO_STATUS_BLOCK *iosb,
-                                       NTSTATUS status, void **apc, void **arg )
+static NTSTATUS FILE_AsyncReadService( void *user, IO_STATUS_BLOCK *iosb, NTSTATUS status )
 {
     struct async_fileio_read *fileio = user;
     int fd, needs_close, result;
@@ -540,8 +550,6 @@ static NTSTATUS FILE_AsyncReadService( void *user, IO_STATUS_BLOCK *iosb,
     {
         iosb->u.Status = status;
         iosb->Information = fileio->already;
-        *apc = fileio->io.apc;
-        *arg = fileio->io.apc_arg;
         release_fileio( &fileio->io );
     }
     return status;
@@ -556,9 +564,8 @@ static NTSTATUS server_read_file( HANDLE handle, HANDLE event, PIO_APC_ROUTINE a
     NTSTATUS status;
     HANDLE wait_handle;
     ULONG options;
-    ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_context;
 
-    if (!(async = (struct async_irp *)alloc_fileio( sizeof(*async), handle, apc, apc_context )))
+    if (!(async = (struct async_irp *)alloc_fileio( sizeof(*async), irp_completion, handle )))
         return STATUS_NO_MEMORY;
 
     async->event   = event;
@@ -567,14 +574,8 @@ static NTSTATUS server_read_file( HANDLE handle, HANDLE event, PIO_APC_ROUTINE a
 
     SERVER_START_REQ( read )
     {
-        req->blocking       = !apc && !event && !cvalue;
-        req->async.handle   = wine_server_obj_handle( handle );
-        req->async.callback = wine_server_client_ptr( irp_completion );
-        req->async.iosb     = wine_server_client_ptr( io );
-        req->async.arg      = wine_server_client_ptr( async );
-        req->async.event    = wine_server_obj_handle( event );
-        req->async.cvalue   = cvalue;
-        req->pos            = offset ? offset->QuadPart : 0;
+        req->async = server_async( handle, &async->io, event, apc, apc_context, io );
+        req->pos   = offset ? offset->QuadPart : 0;
         wine_server_set_reply( req, buffer, size );
         status = wine_server_call( req );
         wait_handle = wine_server_ptr_handle( reply->wait );
@@ -603,9 +604,8 @@ static NTSTATUS server_write_file( HANDLE handle, HANDLE event, PIO_APC_ROUTINE 
     NTSTATUS status;
     HANDLE wait_handle;
     ULONG options;
-    ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_context;
 
-    if (!(async = (struct async_irp *)alloc_fileio( sizeof(*async), handle, apc, apc_context )))
+    if (!(async = (struct async_irp *)alloc_fileio( sizeof(*async), irp_completion, handle )))
         return STATUS_NO_MEMORY;
 
     async->event   = event;
@@ -614,14 +614,8 @@ static NTSTATUS server_write_file( HANDLE handle, HANDLE event, PIO_APC_ROUTINE 
 
     SERVER_START_REQ( write )
     {
-        req->blocking       = !apc && !event && !cvalue;
-        req->async.handle   = wine_server_obj_handle( handle );
-        req->async.callback = wine_server_client_ptr( irp_completion );
-        req->async.iosb     = wine_server_client_ptr( io );
-        req->async.arg      = wine_server_client_ptr( async );
-        req->async.event    = wine_server_obj_handle( event );
-        req->async.cvalue   = cvalue;
-        req->pos            = offset ? offset->QuadPart : 0;
+        req->async = server_async( handle, &async->io, event, apc, apc_context, io );
+        req->pos   = offset ? offset->QuadPart : 0;
         wine_server_add_data( req, buffer, size );
         status = wine_server_call( req );
         wait_handle = wine_server_ptr_handle( reply->wait );
@@ -779,11 +773,10 @@ static NTSTATUS register_async_file_read( HANDLE handle, HANDLE event,
                                           IO_STATUS_BLOCK *iosb, void *buffer,
                                           ULONG already, ULONG length, BOOL avail_mode )
 {
-    ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_user;
     struct async_fileio_read *fileio;
     NTSTATUS status;
 
-    if (!(fileio = (struct async_fileio_read *)alloc_fileio( sizeof(*fileio), handle, apc, apc_user )))
+    if (!(fileio = (struct async_fileio_read *)alloc_fileio( sizeof(*fileio), FILE_AsyncReadService, handle )))
         return STATUS_NO_MEMORY;
 
     fileio->already = already;
@@ -795,12 +788,7 @@ static NTSTATUS register_async_file_read( HANDLE handle, HANDLE event,
     {
         req->type   = ASYNC_TYPE_READ;
         req->count  = length;
-        req->async.handle   = wine_server_obj_handle( handle );
-        req->async.event    = wine_server_obj_handle( event );
-        req->async.callback = wine_server_client_ptr( FILE_AsyncReadService );
-        req->async.iosb     = wine_server_client_ptr( iosb );
-        req->async.arg      = wine_server_client_ptr( fileio );
-        req->async.cvalue   = cvalue;
+        req->async  = server_async( handle, &fileio->io, event, apc, apc_user, iosb );
         status = wine_server_call( req );
     }
     SERVER_END_REQ;
@@ -1118,8 +1106,7 @@ NTSTATUS WINAPI NtReadFileScatter( HANDLE file, HANDLE event, PIO_APC_ROUTINE ap
 /***********************************************************************
  *             FILE_AsyncWriteService      (INTERNAL)
  */
-static NTSTATUS FILE_AsyncWriteService( void *user, IO_STATUS_BLOCK *iosb,
-                                        NTSTATUS status, void **apc, void **arg )
+static NTSTATUS FILE_AsyncWriteService( void *user, IO_STATUS_BLOCK *iosb, NTSTATUS status )
 {
     struct async_fileio_write *fileio = user;
     int result, fd, needs_close;
@@ -1161,8 +1148,6 @@ static NTSTATUS FILE_AsyncWriteService( void *user, IO_STATUS_BLOCK *iosb,
     {
         iosb->u.Status = status;
         iosb->Information = fileio->already;
-        *apc = fileio->io.apc;
-        *arg = fileio->io.apc_arg;
         release_fileio( &fileio->io );
     }
     return status;
@@ -1345,7 +1330,7 @@ NTSTATUS WINAPI NtWriteFile(HANDLE hFile, HANDLE hEvent,
         {
             struct async_fileio_write *fileio;
 
-            fileio = (struct async_fileio_write *)alloc_fileio( sizeof(*fileio), hFile, apc, apc_user );
+            fileio = (struct async_fileio_write *)alloc_fileio( sizeof(*fileio), FILE_AsyncWriteService, hFile );
             if (!fileio)
             {
                 status = STATUS_NO_MEMORY;
@@ -1359,12 +1344,7 @@ NTSTATUS WINAPI NtWriteFile(HANDLE hFile, HANDLE hEvent,
             {
                 req->type   = ASYNC_TYPE_WRITE;
                 req->count  = length;
-                req->async.handle   = wine_server_obj_handle( hFile );
-                req->async.event    = wine_server_obj_handle( hEvent );
-                req->async.callback = wine_server_client_ptr( FILE_AsyncWriteService );
-                req->async.iosb     = wine_server_client_ptr( io_status );
-                req->async.arg      = wine_server_client_ptr( fileio );
-                req->async.cvalue   = cvalue;
+                req->async  = server_async( hFile, &fileio->io, hEvent, apc, apc_user, io_status );
                 status = wine_server_call( req );
             }
             SERVER_END_REQ;
@@ -1537,9 +1517,8 @@ static NTSTATUS server_ioctl_file( HANDLE handle, HANDLE event,
     NTSTATUS status;
     HANDLE wait_handle;
     ULONG options;
-    ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_context;
 
-    if (!(async = (struct async_irp *)alloc_fileio( sizeof(*async), handle, apc, apc_context )))
+    if (!(async = (struct async_irp *)alloc_fileio( sizeof(*async), irp_completion, handle )))
         return STATUS_NO_MEMORY;
     async->event   = event;
     async->buffer  = out_buffer;
@@ -1547,14 +1526,8 @@ static NTSTATUS server_ioctl_file( HANDLE handle, HANDLE event,
 
     SERVER_START_REQ( ioctl )
     {
-        req->code           = code;
-        req->blocking       = !apc && !event && !cvalue;
-        req->async.handle   = wine_server_obj_handle( handle );
-        req->async.callback = wine_server_client_ptr( irp_completion );
-        req->async.iosb     = wine_server_client_ptr( io );
-        req->async.arg      = wine_server_client_ptr( async );
-        req->async.event    = wine_server_obj_handle( event );
-        req->async.cvalue   = cvalue;
+        req->code  = code;
+        req->async = server_async( handle, &async->io, event, apc, apc_context, io );
         wine_server_add_data( req, in_buffer, in_size );
         if ((code & 3) != METHOD_BUFFERED)
             wine_server_add_data( req, out_buffer, out_size );
@@ -1854,8 +1827,7 @@ struct read_changes_fileio
     char                data[1];
 };
 
-static NTSTATUS read_changes_apc( void *user, IO_STATUS_BLOCK *iosb,
-                                  NTSTATUS status, void **apc, void **arg )
+static NTSTATUS read_changes_apc( void *user, IO_STATUS_BLOCK *iosb, NTSTATUS status )
 {
     struct read_changes_fileio *fileio = user;
     int size = 0;
@@ -1925,8 +1897,6 @@ static NTSTATUS read_changes_apc( void *user, IO_STATUS_BLOCK *iosb,
     {
         iosb->u.Status = status;
         iosb->Information = size;
-        *apc = fileio->io.apc;
-        *arg = fileio->io.apc_arg;
         release_fileio( &fileio->io );
     }
     return status;
@@ -1952,7 +1922,6 @@ NTSTATUS WINAPI NtNotifyChangeDirectoryFile( HANDLE handle, HANDLE event, PIO_AP
     struct read_changes_fileio *fileio;
     NTSTATUS status;
     ULONG size = max( 4096, buffer_size );
-    ULONG_PTR cvalue = apc ? 0 : (ULONG_PTR)apc_context;
 
     TRACE( "%p %p %p %p %p %p %u %u %d\n",
            handle, event, apc, apc_context, iosb, buffer, buffer_size, filter, subtree );
@@ -1961,7 +1930,7 @@ NTSTATUS WINAPI NtNotifyChangeDirectoryFile( HANDLE handle, HANDLE event, PIO_AP
     if (filter == 0 || (filter & ~FILE_NOTIFY_ALL)) return STATUS_INVALID_PARAMETER;
 
     fileio = (struct read_changes_fileio *)alloc_fileio( offsetof(struct read_changes_fileio, data[size]),
-                                                         handle, apc, apc_context );
+                                                         read_changes_apc, handle );
     if (!fileio) return STATUS_NO_MEMORY;
 
     fileio->buffer      = buffer;
@@ -1970,15 +1939,10 @@ NTSTATUS WINAPI NtNotifyChangeDirectoryFile( HANDLE handle, HANDLE event, PIO_AP
 
     SERVER_START_REQ( read_directory_changes )
     {
-        req->filter         = filter;
-        req->want_data      = (buffer != NULL);
-        req->subtree        = subtree;
-        req->async.handle   = wine_server_obj_handle( handle );
-        req->async.callback = wine_server_client_ptr( read_changes_apc );
-        req->async.iosb     = wine_server_client_ptr( iosb );
-        req->async.arg      = wine_server_client_ptr( fileio );
-        req->async.event    = wine_server_obj_handle( event );
-        req->async.cvalue   = cvalue;
+        req->filter    = filter;
+        req->want_data = (buffer != NULL);
+        req->subtree   = subtree;
+        req->async     = server_async( handle, &fileio->io, event, apc, apc_context, iosb );
         status = wine_server_call( req );
     }
     SERVER_END_REQ;
@@ -3447,9 +3411,7 @@ NTSTATUS WINAPI NtFlushBuffersFile( HANDLE hFile, IO_STATUS_BLOCK* IoStatusBlock
     {
         SERVER_START_REQ( flush )
         {
-            req->blocking     = 1;  /* always blocking */
-            req->async.handle = wine_server_obj_handle( hFile );
-            req->async.iosb   = wine_server_client_ptr( IoStatusBlock );
+            req->async = server_async( hFile, NULL, NULL, NULL, NULL, IoStatusBlock );
             ret = wine_server_call( req );
             hEvent = wine_server_ptr_handle( reply->event );
         }

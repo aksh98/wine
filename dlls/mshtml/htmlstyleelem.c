@@ -33,14 +33,14 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
-typedef struct {
+struct HTMLStyleElement {
     HTMLElement element;
 
     IHTMLStyleElement IHTMLStyleElement_iface;
 
     nsIDOMHTMLStyleElement *nsstyle;
     IHTMLStyleSheet *style_sheet;
-} HTMLStyleElement;
+};
 
 static inline HTMLStyleElement *impl_from_IHTMLStyleElement(IHTMLStyleElement *iface)
 {
@@ -340,6 +340,7 @@ static void HTMLStyleElement_unlink(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLStyleElementImplVtbl = {
+    &CLSID_HTMLStyleElement,
     HTMLStyleElement_QI,
     HTMLStyleElement_destructor,
     HTMLElement_cpc,

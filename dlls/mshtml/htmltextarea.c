@@ -32,13 +32,13 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
-typedef struct {
+struct HTMLTextAreaElement {
     HTMLElement element;
 
     IHTMLTextAreaElement IHTMLTextAreaElement_iface;
 
     nsIDOMHTMLTextAreaElement *nstextarea;
-} HTMLTextAreaElement;
+};
 
 static inline HTMLTextAreaElement *impl_from_IHTMLTextAreaElement(IHTMLTextAreaElement *iface)
 {
@@ -476,6 +476,7 @@ static void HTMLTextAreaElement_unlink(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLTextAreaElementImplVtbl = {
+    &CLSID_HTMLTextAreaElement,
     HTMLTextAreaElement_QI,
     HTMLElement_destructor,
     HTMLElement_cpc,

@@ -7677,7 +7677,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr "Inserta el contenido del portapapeles en su documento."
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr "Tipo desconocido"
 
@@ -12395,6 +12395,12 @@ msgstr ""
 #| msgid "Error: Unable to add keys to remote machine\n"
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "Error: No se puede agregar claves al equipo remoto\n"
+
+#: regedit.rc:398
+#, fuzzy
+#| msgid "No command was specified."
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr "No se ha especificado un comando."
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

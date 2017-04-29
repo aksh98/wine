@@ -70,7 +70,7 @@ static GLenum get_texture_view_target(const struct wined3d_gl_info *gl_info,
     return texture->target;
 }
 
-static const struct wined3d_format *validate_shader_resource_view(const struct wined3d_view_desc *desc,
+static const struct wined3d_format *validate_resource_view(const struct wined3d_view_desc *desc,
         struct wined3d_resource *resource, BOOL mip_slice)
 {
     const struct wined3d_gl_info *gl_info = &resource->device->adapter->gl_info;
@@ -153,7 +153,7 @@ static void create_texture_view(struct wined3d_gl_view *view, GLenum view_target
     const struct wined3d_gl_info *gl_info;
     unsigned int layer_idx, layer_count;
     struct wined3d_context *context;
-    struct gl_texture *gl_texture;
+    GLuint texture_name;
 
     view->target = view_target;
 
@@ -168,7 +168,7 @@ static void create_texture_view(struct wined3d_gl_view *view, GLenum view_target
     }
 
     wined3d_texture_prepare_texture(texture, context, FALSE);
-    gl_texture = wined3d_texture_get_gl_texture(texture, FALSE);
+    texture_name = wined3d_texture_get_texture_name(texture, context, FALSE);
 
     layer_idx = desc->u.texture.layer_idx;
     layer_count = desc->u.texture.layer_count;
@@ -180,7 +180,7 @@ static void create_texture_view(struct wined3d_gl_view *view, GLenum view_target
     }
 
     gl_info->gl_ops.gl.p_glGenTextures(1, &view->name);
-    GL_EXTCALL(glTextureView(view->name, view->target, gl_texture->name, view_format->glInternal,
+    GL_EXTCALL(glTextureView(view->name, view->target, texture_name, view_format->glInternal,
             desc->u.texture.level_idx, desc->u.texture.level_count,
             layer_idx, layer_count));
     checkGLcall("Create texture view");
@@ -270,6 +270,26 @@ static void create_buffer_view(struct wined3d_gl_view *view, struct wined3d_cont
     create_buffer_texture(view, context, buffer, view_format, offset, size);
 }
 
+static void wined3d_view_invalidate_location(struct wined3d_resource *resource,
+        const struct wined3d_view_desc *desc, DWORD location)
+{
+    unsigned int i, sub_resource_idx, layer_count;
+    struct wined3d_texture *texture;
+
+    if (resource->type == WINED3D_RTYPE_BUFFER)
+    {
+        wined3d_buffer_invalidate_location(buffer_from_resource(resource), location);
+        return;
+    }
+
+    texture = texture_from_resource(resource);
+
+    sub_resource_idx = desc->u.texture.layer_idx * texture->level_count + desc->u.texture.level_idx;
+    layer_count = resource->type != WINED3D_RTYPE_TEXTURE_3D ? desc->u.texture.layer_count : 1;
+    for (i = 0; i < layer_count; ++i, sub_resource_idx += texture->level_count)
+        wined3d_texture_invalidate_location(texture, sub_resource_idx, location);
+}
+
 ULONG CDECL wined3d_rendertarget_view_incref(struct wined3d_rendertarget_view *view)
 {
     ULONG refcount = InterlockedIncrement(&view->refcount);
@@ -281,7 +301,23 @@ ULONG CDECL wined3d_rendertarget_view_incref(struct wined3d_rendertarget_view *v
 
 static void wined3d_rendertarget_view_destroy_object(void *object)
 {
-    HeapFree(GetProcessHeap(), 0, object);
+    struct wined3d_rendertarget_view *view = object;
+    struct wined3d_device *device = view->resource->device;
+
+    if (view->gl_view.name)
+    {
+        const struct wined3d_gl_info *gl_info;
+        struct wined3d_context *context;
+
+        context = context_acquire(device, NULL, 0);
+        gl_info = context->gl_info;
+        context_gl_resource_released(device, view->gl_view.name, FALSE);
+        gl_info->gl_ops.gl.p_glDeleteTextures(1, &view->gl_view.name);
+        checkGLcall("glDeleteTextures");
+        context_release(context);
+    }
+
+    HeapFree(GetProcessHeap(), 0, view);
 }
 
 ULONG CDECL wined3d_rendertarget_view_decref(struct wined3d_rendertarget_view *view)
@@ -347,9 +383,8 @@ void wined3d_rendertarget_view_get_drawable_size(const struct wined3d_rendertarg
 
     if (view->resource->type != WINED3D_RTYPE_TEXTURE_2D)
     {
-        FIXME("Not implemented for %s resources.\n", debug_d3dresourcetype(view->resource->type));
-        *width = 0;
-        *height = 0;
+        *width = view->width;
+        *height = view->height;
         return;
     }
 
@@ -359,8 +394,8 @@ void wined3d_rendertarget_view_get_drawable_size(const struct wined3d_rendertarg
         /* The drawable size of an onscreen drawable is the surface size.
          * (Actually: The window size, but the surface is created in window
          * size.) */
-        *width = context->current_rt.texture->resource.width;
-        *height = context->current_rt.texture->resource.height;
+        *width = texture->resource.width;
+        *height = texture->resource.height;
     }
     else if (wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER)
     {
@@ -374,42 +409,88 @@ void wined3d_rendertarget_view_get_drawable_size(const struct wined3d_rendertarg
     }
     else
     {
-        struct wined3d_surface *rt;
+        unsigned int level_idx = view->sub_resource_idx % texture->level_count;
 
         /* The drawable size of an FBO target is the OpenGL texture size,
          * which is the power of two size. */
-        rt = context->current_rt.texture->sub_resources[context->current_rt.sub_resource_idx].u.surface;
-        *width = wined3d_texture_get_level_pow2_width(rt->container, rt->texture_level);
-        *height = wined3d_texture_get_level_pow2_height(rt->container, rt->texture_level);
+        *width = wined3d_texture_get_level_pow2_width(texture, level_idx);
+        *height = wined3d_texture_get_level_pow2_height(texture, level_idx);
     }
 }
 
-static HRESULT wined3d_rendertarget_view_init(struct wined3d_rendertarget_view *view,
-        const struct wined3d_view_desc *desc, struct wined3d_resource *resource,
-        void *parent, const struct wined3d_parent_ops *parent_ops)
+void wined3d_rendertarget_view_prepare_location(struct wined3d_rendertarget_view *view,
+        struct wined3d_context *context, DWORD location)
 {
-    const struct wined3d_gl_info *gl_info = &resource->device->adapter->gl_info;
-
-    view->refcount = 1;
-    view->parent = parent;
-    view->parent_ops = parent_ops;
-
-    view->format = wined3d_get_format(gl_info, desc->format_id, resource->usage);
-    view->format_flags = view->format->flags[resource->gl_type];
-
-    if (wined3d_format_is_typeless(view->format))
-    {
-        WARN("Trying to create view for typeless format %s.\n", debug_d3dformat(view->format->id));
-        return E_INVALIDARG;
-    }
+    struct wined3d_resource *resource = view->resource;
+    unsigned int i, sub_resource_idx, layer_count;
+    struct wined3d_texture *texture;
 
     if (resource->type == WINED3D_RTYPE_BUFFER)
     {
-        view->sub_resource_idx = 0;
-        view->buffer_offset = desc->u.buffer.start_idx;
-        view->width = desc->u.buffer.count;
-        view->height = 1;
-        view->depth = 1;
+        FIXME("Not implemented for resources %s.\n", debug_d3dresourcetype(resource->type));
+        return;
+    }
+
+    texture = texture_from_resource(resource);
+    sub_resource_idx = view->sub_resource_idx;
+    layer_count = resource->type != WINED3D_RTYPE_TEXTURE_3D ? view->layer_count : 1;
+    for (i = 0; i < layer_count; ++i, sub_resource_idx += texture->level_count)
+        wined3d_texture_prepare_location(texture, sub_resource_idx, context, location);
+}
+
+void wined3d_rendertarget_view_load_location(struct wined3d_rendertarget_view *view,
+        struct wined3d_context *context, DWORD location)
+{
+    struct wined3d_resource *resource = view->resource;
+    unsigned int i, sub_resource_idx, layer_count;
+    struct wined3d_texture *texture;
+
+    if (resource->type == WINED3D_RTYPE_BUFFER)
+    {
+        wined3d_buffer_load_location(buffer_from_resource(resource), context, location);
+        return;
+    }
+
+    texture = texture_from_resource(resource);
+    sub_resource_idx = view->sub_resource_idx;
+    layer_count = resource->type != WINED3D_RTYPE_TEXTURE_3D ? view->layer_count : 1;
+    for (i = 0; i < layer_count; ++i, sub_resource_idx += texture->level_count)
+        wined3d_texture_load_location(texture, sub_resource_idx, context, location);
+}
+
+void wined3d_rendertarget_view_validate_location(struct wined3d_rendertarget_view *view, DWORD location)
+{
+    struct wined3d_resource *resource = view->resource;
+    unsigned int i, sub_resource_idx, layer_count;
+    struct wined3d_texture *texture;
+
+    if (resource->type == WINED3D_RTYPE_BUFFER)
+    {
+        FIXME("Not implemented for resources %s.\n", debug_d3dresourcetype(resource->type));
+        return;
+    }
+
+    texture = texture_from_resource(resource);
+    sub_resource_idx = view->sub_resource_idx;
+    layer_count = resource->type != WINED3D_RTYPE_TEXTURE_3D ? view->layer_count : 1;
+    for (i = 0; i < layer_count; ++i, sub_resource_idx += texture->level_count)
+        wined3d_texture_validate_location(texture, sub_resource_idx, location);
+}
+
+void wined3d_rendertarget_view_invalidate_location(struct wined3d_rendertarget_view *view, DWORD location)
+{
+    wined3d_view_invalidate_location(view->resource, &view->desc, location);
+}
+
+static void wined3d_render_target_view_cs_init(void *object)
+{
+    struct wined3d_rendertarget_view *view = object;
+    struct wined3d_resource *resource = view->resource;
+    const struct wined3d_view_desc *desc = &view->desc;
+
+    if (resource->type == WINED3D_RTYPE_BUFFER)
+    {
+        FIXME("Not implemented for resources %s.\n", debug_d3dresourcetype(resource->type));
     }
     else
     {
@@ -421,22 +502,61 @@ static HRESULT wined3d_rendertarget_view_init(struct wined3d_rendertarget_view *
         else
             depth_or_layer_count = texture->layer_count;
 
-        if (desc->u.texture.level_idx >= texture->level_count
-                || desc->u.texture.level_count != 1
-                || desc->u.texture.layer_idx >= depth_or_layer_count
-                || !desc->u.texture.layer_count
-                || desc->u.texture.layer_count > depth_or_layer_count - desc->u.texture.layer_idx)
-            return E_INVALIDARG;
+        if (resource->format->id != view->format->id
+                || (view->layer_count != 1 && view->layer_count != depth_or_layer_count))
+        {
+            if (resource->format->gl_view_class != view->format->gl_view_class)
+            {
+                FIXME("Render target view not supported, resource format %s, view format %s.\n",
+                        debug_d3dformat(resource->format->id), debug_d3dformat(view->format->id));
+                return;
+            }
+            if (texture->swapchain && texture->swapchain->desc.backbuffer_count > 1)
+            {
+                FIXME("Swapchain views not supported.\n");
+                return;
+            }
+
+            create_texture_view(&view->gl_view, texture->target, desc, texture, view->format);
+        }
+    }
+}
+
+static HRESULT wined3d_rendertarget_view_init(struct wined3d_rendertarget_view *view,
+        const struct wined3d_view_desc *desc, struct wined3d_resource *resource,
+        void *parent, const struct wined3d_parent_ops *parent_ops)
+{
+    view->refcount = 1;
+    view->parent = parent;
+    view->parent_ops = parent_ops;
+
+    if (!(view->format = validate_resource_view(desc, resource, TRUE)))
+        return E_INVALIDARG;
+    view->format_flags = view->format->flags[resource->gl_type];
+    view->desc = *desc;
+
+    if (resource->type == WINED3D_RTYPE_BUFFER)
+    {
+        view->sub_resource_idx = 0;
+        view->layer_count = 1;
+        view->width = desc->u.buffer.count;
+        view->height = 1;
+    }
+    else
+    {
+        struct wined3d_texture *texture = texture_from_resource(resource);
 
         view->sub_resource_idx = desc->u.texture.level_idx;
         if (resource->type != WINED3D_RTYPE_TEXTURE_3D)
             view->sub_resource_idx += desc->u.texture.layer_idx * texture->level_count;
-        view->buffer_offset = 0;
+        view->layer_count = desc->u.texture.layer_count;
         view->width = wined3d_texture_get_level_width(texture, desc->u.texture.level_idx);
         view->height = wined3d_texture_get_level_height(texture, desc->u.texture.level_idx);
-        view->depth = desc->u.texture.layer_count;
     }
+
     wined3d_resource_incref(view->resource = resource);
+
+    wined3d_cs_init_object(resource->device->cs, wined3d_render_target_view_cs_init, view);
 
     return WINED3D_OK;
 }
@@ -602,7 +722,7 @@ static HRESULT wined3d_shader_resource_view_init(struct wined3d_shader_resource_
     view->parent = parent;
     view->parent_ops = parent_ops;
 
-    if (!(view->format = validate_shader_resource_view(desc, resource, FALSE)))
+    if (!(view->format = validate_resource_view(desc, resource, FALSE)))
         return E_INVALIDARG;
     view->desc = *desc;
 
@@ -727,22 +847,7 @@ void * CDECL wined3d_unordered_access_view_get_parent(const struct wined3d_unord
 void wined3d_unordered_access_view_invalidate_location(struct wined3d_unordered_access_view *view,
         DWORD location)
 {
-    struct wined3d_resource *resource = view->resource;
-    unsigned int i, sub_resource_idx, layer_count;
-    struct wined3d_texture *texture;
-
-    if (resource->type == WINED3D_RTYPE_BUFFER)
-    {
-        wined3d_buffer_invalidate_location(buffer_from_resource(resource), location);
-        return;
-    }
-
-    texture = texture_from_resource(resource);
-
-    sub_resource_idx = view->desc.u.texture.layer_idx * texture->level_count + view->desc.u.texture.level_idx;
-    layer_count = (resource->type != WINED3D_RTYPE_TEXTURE_3D) ? view->desc.u.texture.layer_count : 1;
-    for (i = 0; i < layer_count; ++i, sub_resource_idx += texture->level_count)
-        wined3d_texture_invalidate_location(texture, sub_resource_idx, location);
+    wined3d_view_invalidate_location(view->resource, &view->desc, location);
 }
 
 static void wined3d_unordered_access_view_cs_init(void *object)
@@ -799,7 +904,7 @@ static HRESULT wined3d_unordered_access_view_init(struct wined3d_unordered_acces
     view->parent = parent;
     view->parent_ops = parent_ops;
 
-    if (!(view->format = validate_shader_resource_view(desc, resource, TRUE)))
+    if (!(view->format = validate_resource_view(desc, resource, TRUE)))
         return E_INVALIDARG;
     view->desc = *desc;
 

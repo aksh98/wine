@@ -406,11 +406,67 @@ static void remove_vbos(struct wined3d_context *context,
     }
 }
 
+static BOOL use_transform_feedback(const struct wined3d_state *state)
+{
+    const struct wined3d_shader *shader;
+    if (!(shader = state->shader[WINED3D_SHADER_TYPE_GEOMETRY]))
+        return FALSE;
+    return shader->u.gs.so_desc.element_count;
+}
+
+static void context_pause_transform_feedback(struct wined3d_context *context, BOOL force)
+{
+    const struct wined3d_gl_info *gl_info = context->gl_info;
+
+    if (!context->transform_feedback_active || context->transform_feedback_paused)
+        return;
+
+    if (gl_info->supported[ARB_TRANSFORM_FEEDBACK2])
+    {
+        GL_EXTCALL(glPauseTransformFeedback());
+        checkGLcall("glPauseTransformFeedback");
+        context->transform_feedback_paused = 1;
+        return;
+    }
+
+    WARN("Cannot pause transform feedback operations.\n");
+
+    if (force)
+        context_end_transform_feedback(context);
+}
+
+static GLenum gl_tfb_primitive_type_from_d3d(enum wined3d_primitive_type primitive_type)
+{
+    GLenum gl_primitive_type = gl_primitive_type_from_d3d(primitive_type);
+    switch (gl_primitive_type)
+    {
+        case GL_POINTS:
+            return GL_POINTS;
+
+        case GL_LINE_STRIP:
+        case GL_LINE_STRIP_ADJACENCY:
+        case GL_LINES_ADJACENCY:
+        case GL_LINES:
+            return GL_LINES;
+
+        case GL_TRIANGLE_FAN:
+        case GL_TRIANGLE_STRIP:
+        case GL_TRIANGLE_STRIP_ADJACENCY:
+        case GL_TRIANGLES_ADJACENCY:
+        case GL_TRIANGLES:
+            return GL_TRIANGLES;
+
+        default:
+            return gl_primitive_type;
+    }
+}
+
 /* Routine common to the draw primitive and draw indexed primitive routines */
 void draw_primitive(struct wined3d_device *device, const struct wined3d_state *state,
         int base_vertex_idx, unsigned int start_idx, unsigned int index_count,
         unsigned int start_instance, unsigned int instance_count, BOOL indexed)
 {
+    BOOL emulation = FALSE, rasterizer_discard = FALSE;
     const struct wined3d_fb_state *fb = state->fb;
     const struct wined3d_stream_info *stream_info;
     struct wined3d_event_query *ib_query = NULL;
@@ -420,7 +476,6 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
     struct wined3d_context *context;
     unsigned int i, idx_size = 0;
     const void *idx_data = NULL;
-    BOOL emulation = FALSE;
 
     if (!index_count)
         return;
@@ -439,22 +494,22 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
     }
     gl_info = context->gl_info;
 
+    if (!use_transform_feedback(state))
+        context_pause_transform_feedback(context, TRUE);
+
     for (i = 0; i < gl_info->limits.buffers; ++i)
     {
-        struct wined3d_texture *rt;
-
         if (!(rtv = fb->render_targets[i]) || rtv->format->id == WINED3DFMT_NULL)
             continue;
 
-        rt = wined3d_texture_from_resource(rtv->resource);
         if (state->render_states[WINED3D_RS_COLORWRITEENABLE])
         {
-            wined3d_texture_load_location(rt, rtv->sub_resource_idx, context, rtv->resource->draw_binding);
-            wined3d_texture_invalidate_location(rt, rtv->sub_resource_idx, ~rtv->resource->draw_binding);
+            wined3d_rendertarget_view_load_location(rtv, context, rtv->resource->draw_binding);
+            wined3d_rendertarget_view_invalidate_location(rtv, ~rtv->resource->draw_binding);
         }
         else
         {
-            wined3d_texture_prepare_location(rt, rtv->sub_resource_idx, context, rtv->resource->draw_binding);
+            wined3d_rendertarget_view_prepare_location(rtv, context, rtv->resource->draw_binding);
         }
     }
 
@@ -466,12 +521,11 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
          * depthstencil for D3DCMP_NEVER and D3DCMP_ALWAYS as well. Also note
          * that we never copy the stencil data.*/
         DWORD location = context->render_offscreen ? dsv->resource->draw_binding : WINED3D_LOCATION_DRAWABLE;
-        struct wined3d_surface *ds = wined3d_rendertarget_view_get_surface(dsv);
 
         if (state->render_states[WINED3D_RS_ZWRITEENABLE] || state->render_states[WINED3D_RS_ZENABLE])
-            wined3d_texture_load_location(ds->container, dsv->sub_resource_idx, context, location);
+            wined3d_rendertarget_view_load_location(dsv, context, location);
         else
-            wined3d_texture_prepare_location(ds->container, dsv->sub_resource_idx, context, location);
+            wined3d_rendertarget_view_prepare_location(dsv, context, location);
     }
 
     if (!context_apply_draw_state(context, device, state))
@@ -483,11 +537,10 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
 
     if (dsv && state->render_states[WINED3D_RS_ZWRITEENABLE])
     {
-        struct wined3d_surface *ds = wined3d_rendertarget_view_get_surface(dsv);
-        DWORD location = context->render_offscreen ? ds->container->resource.draw_binding : WINED3D_LOCATION_DRAWABLE;
+        DWORD location = context->render_offscreen ? dsv->resource->draw_binding : WINED3D_LOCATION_DRAWABLE;
 
-        wined3d_texture_validate_location(ds->container, dsv->sub_resource_idx, location);
-        wined3d_texture_invalidate_location(ds->container, dsv->sub_resource_idx, ~location);
+        wined3d_rendertarget_view_validate_location(dsv, location);
+        wined3d_rendertarget_view_invalidate_location(dsv, ~location);
     }
 
     stream_info = &context->stream_info;
@@ -549,6 +602,32 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
         }
     }
 
+    if (use_transform_feedback(state))
+    {
+        const struct wined3d_shader *shader = state->shader[WINED3D_SHADER_TYPE_GEOMETRY];
+
+        if (shader->u.gs.so_desc.rasterizer_stream_idx == WINED3D_NO_RASTERIZER_STREAM)
+        {
+            glEnable(GL_RASTERIZER_DISCARD);
+            checkGLcall("enable rasterizer discard");
+            rasterizer_discard = TRUE;
+        }
+
+        if (context->transform_feedback_paused)
+        {
+            GL_EXTCALL(glResumeTransformFeedback());
+            checkGLcall("glResumeTransformFeedback");
+            context->transform_feedback_paused = 0;
+        }
+        else if (!context->transform_feedback_active)
+        {
+            GLenum mode = gl_tfb_primitive_type_from_d3d(shader->u.gs.output_type);
+            GL_EXTCALL(glBeginTransformFeedback(mode));
+            checkGLcall("glBeginTransformFeedback");
+            context->transform_feedback_active = 1;
+        }
+    }
+
     if (context->use_immediate_mode_draw || emulation)
         draw_primitive_immediate_mode(context, state, stream_info, idx_data,
                 idx_size, base_vertex_idx, start_idx, index_count, instance_count);
@@ -560,6 +639,14 @@ void draw_primitive(struct wined3d_device *device, const struct wined3d_state *s
     {
         GL_EXTCALL(glMemoryBarrier(GL_ALL_BARRIER_BITS));
         checkGLcall("glMemoryBarrier");
+    }
+
+    context_pause_transform_feedback(context, FALSE);
+
+    if (rasterizer_discard)
+    {
+        glDisable(GL_RASTERIZER_DISCARD);
+        checkGLcall("disable rasterizer discard");
     }
 
     if (ib_query)

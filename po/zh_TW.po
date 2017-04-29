@@ -7550,7 +7550,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr "將剪貼簿的內容插入到您的文件。"
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr "不明類型"
 
@@ -12264,6 +12264,12 @@ msgstr "錯誤：系統無法找到指定的註冊表索引鍵或值\n"
 #| msgid "Error: Unable to add keys to remote machine\n"
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "錯誤：無法加入索引鍵到遠端機器\n"
+
+#: regedit.rc:398
+#, fuzzy
+#| msgid "No command was specified."
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr "沒有任何命令被指定。"
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

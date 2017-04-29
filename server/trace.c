@@ -158,8 +158,7 @@ static void dump_apc_call( const char *prefix, const apc_call_t *call )
         dump_uint64( ",arg=", &call->timer.arg );
         break;
     case APC_ASYNC_IO:
-        dump_uint64( "APC_ASYNC_IO,func=", &call->async_io.func );
-        dump_uint64( ",user=", &call->async_io.user );
+        dump_uint64( "APC_ASYNC_IO,user=", &call->async_io.user );
         dump_uint64( ",sb=", &call->async_io.sb );
         fprintf( stderr, ",status=%s", get_status_name(call->async_io.status) );
         break;
@@ -230,8 +229,6 @@ static void dump_apc_result( const char *prefix, const apc_result_t *result )
     case APC_ASYNC_IO:
         fprintf( stderr, "APC_ASYNC_IO,status=%s,total=%u",
                  get_status_name( result->async_io.status ), result->async_io.total );
-        dump_uint64( ",apc=", &result->async_io.apc );
-        dump_uint64( ",arg=", &result->async_io.arg );
         break;
     case APC_VIRTUAL_ALLOC:
         fprintf( stderr, "APC_VIRTUAL_ALLOC,status=%s",
@@ -305,10 +302,10 @@ static void dump_apc_result( const char *prefix, const apc_result_t *result )
 static void dump_async_data( const char *prefix, const async_data_t *data )
 {
     fprintf( stderr, "%s{handle=%04x,event=%04x", prefix, data->handle, data->event );
-    dump_uint64( ",callback=", &data->callback );
     dump_uint64( ",iosb=", &data->iosb );
-    dump_uint64( ",arg=", &data->arg );
-    dump_uint64( ",cvalue=", &data->cvalue );
+    dump_uint64( ",user=", &data->user );
+    dump_uint64( ",apc=", &data->apc );
+    dump_uint64( ",apc_context=", &data->apc_context );
     fputc( '}', stderr );
 }
 
@@ -1779,8 +1776,7 @@ static void dump_get_directory_cache_entry_reply( const struct get_directory_cac
 
 static void dump_flush_request( const struct flush_request *req )
 {
-    fprintf( stderr, " blocking=%d", req->blocking );
-    dump_async_data( ", async=", &req->async );
+    dump_async_data( " async=", &req->async );
 }
 
 static void dump_flush_reply( const struct flush_reply *req )
@@ -2883,8 +2879,7 @@ static void dump_get_async_result_reply( const struct get_async_result_reply *re
 
 static void dump_read_request( const struct read_request *req )
 {
-    fprintf( stderr, " blocking=%d", req->blocking );
-    dump_async_data( ", async=", &req->async );
+    dump_async_data( " async=", &req->async );
     dump_uint64( ", pos=", &req->pos );
 }
 
@@ -2897,8 +2892,7 @@ static void dump_read_reply( const struct read_reply *req )
 
 static void dump_write_request( const struct write_request *req )
 {
-    fprintf( stderr, " blocking=%d", req->blocking );
-    dump_async_data( ", async=", &req->async );
+    dump_async_data( " async=", &req->async );
     dump_uint64( ", pos=", &req->pos );
     dump_varargs_bytes( ", data=", cur_size );
 }
@@ -2914,7 +2908,6 @@ static void dump_ioctl_request( const struct ioctl_request *req )
 {
     dump_ioctl_code( " code=", &req->code );
     dump_async_data( ", async=", &req->async );
-    fprintf( stderr, ", blocking=%d", req->blocking );
     dump_varargs_bytes( ", in_data=", cur_size );
 }
 
@@ -5367,6 +5360,7 @@ static const struct
     { "HANDLE_NOT_CLOSABLE",         STATUS_HANDLE_NOT_CLOSABLE },
     { "HOST_UNREACHABLE",            STATUS_HOST_UNREACHABLE },
     { "ILLEGAL_FUNCTION",            STATUS_ILLEGAL_FUNCTION },
+    { "INFO_LENGTH_MISMATCH",        STATUS_INFO_LENGTH_MISMATCH },
     { "INSTANCE_NOT_AVAILABLE",      STATUS_INSTANCE_NOT_AVAILABLE },
     { "INSUFFICIENT_RESOURCES",      STATUS_INSUFFICIENT_RESOURCES },
     { "INVALID_CID",                 STATUS_INVALID_CID },
@@ -5413,6 +5407,7 @@ static const struct
     { "OBJECT_PATH_SYNTAX_BAD",      STATUS_OBJECT_PATH_SYNTAX_BAD },
     { "OBJECT_TYPE_MISMATCH",        STATUS_OBJECT_TYPE_MISMATCH },
     { "PENDING",                     STATUS_PENDING },
+    { "PIPE_BROKEN",                 STATUS_PIPE_BROKEN },
     { "PIPE_CONNECTED",              STATUS_PIPE_CONNECTED },
     { "PIPE_DISCONNECTED",           STATUS_PIPE_DISCONNECTED },
     { "PIPE_LISTENING",              STATUS_PIPE_LISTENING },

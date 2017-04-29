@@ -1255,6 +1255,22 @@ ULONGLONG CDECL MSVCP__crtGetTickCount64(void)
 }
 
 /*********************************************************************
+ *  __crtGetCurrentProcessorNumber (MSVCP140.@)
+ */
+DWORD CDECL MSVCP__crtGetCurrentProcessorNumber(void)
+{
+    return GetCurrentProcessorNumber();
+}
+
+/*********************************************************************
+ *  __crtFlushProcessWriteBuffers (MSVCP140.@)
+ */
+VOID CDECL MSVCP__crtFlushProcessWriteBuffers(void)
+{
+    return FlushProcessWriteBuffers();
+}
+
+/*********************************************************************
  *  __crtCreateSemaphoreExW (MSVCP140.@)
  */
 HANDLE CDECL MSVCP__crtCreateSemaphoreExW(
@@ -1277,6 +1293,15 @@ PTP_TIMER CDECL MSVCP__crtCreateThreadpoolTimer(PTP_TIMER_CALLBACK callback,
 }
 
 /*********************************************************************
+ *  __crtCloseThreadpoolTimer (MSVCP140.@)
+ */
+VOID CDECL MSVCP__crtCloseThreadpoolTimer(TP_TIMER *timer)
+{
+    TRACE("(%p)\n", timer);
+    CloseThreadpoolTimer(timer);
+}
+
+/*********************************************************************
  *  __crtSetThreadpoolTimer (MSVCP140.@)
  */
 VOID CDECL MSVCP__crtSetThreadpoolTimer(TP_TIMER *timer,
@@ -1284,6 +1309,15 @@ VOID CDECL MSVCP__crtSetThreadpoolTimer(TP_TIMER *timer,
 {
     TRACE("(%p %p 0x%08x 0x%08x)\n", timer, due_time, period, window_length);
     return SetThreadpoolTimer(timer, due_time, period, window_length);
+}
+
+/*********************************************************************
+ *  __crtWaitForThreadpoolTimerCallbacks (MSVCP140.@)
+ */
+VOID CDECL MSVCP__crtWaitForThreadpoolTimerCallbacks(TP_TIMER *timer, BOOL cancel)
+{
+    TRACE("(%p %d)\n", timer, cancel);
+    WaitForThreadpoolTimerCallbacks(timer, cancel);
 }
 
 /*********************************************************************
@@ -1297,12 +1331,30 @@ PTP_WAIT CDECL MSVCP__crtCreateThreadpoolWait(PTP_WAIT_CALLBACK callback,
 }
 
 /*********************************************************************
+ *  __crtCloseThreadpoolWait (MSVCP140.@)
+ */
+VOID CDECL MSVCP__crtCloseThreadpoolWait(TP_WAIT *wait)
+{
+    TRACE("(%p)\n", wait);
+    CloseThreadpoolWait(wait);
+}
+
+/*********************************************************************
  *  __crtSetThreadpoolWait (MSVCP140.@)
  */
 VOID CDECL MSVCP__crtSetThreadpoolWait(TP_WAIT *wait, HANDLE handle, FILETIME *due_time)
 {
     TRACE("(%p %p %p)\n", wait, handle, due_time);
     return SetThreadpoolWait(wait, handle, due_time);
+}
+
+/*********************************************************************
+ *  __crtFreeLibraryWhenCallbackReturns (MSVCP140.@)
+ */
+VOID CDECL MSVCP__crtFreeLibraryWhenCallbackReturns(PTP_CALLBACK_INSTANCE instance, HMODULE mod)
+{
+    TRACE("(%p %p)\n", instance, mod);
+    FreeLibraryWhenCallbackReturns(instance, mod);
 }
 
 /* ?_Execute_once@std@@YAHAAUonce_flag@1@P6GHPAX1PAPAX@Z1@Z */
@@ -1312,6 +1364,7 @@ BOOL __cdecl _Execute_once(INIT_ONCE *flag, PINIT_ONCE_FN func, void *param)
     return InitOnceExecuteOnce(flag, func, param, NULL);
 }
 
+#if _MSVCP_VER >= 100
 void init_misc(void *base)
 {
 #ifdef __x86_64__
@@ -1341,6 +1394,7 @@ void free_misc(void)
     HeapFree(GetProcessHeap(), 0, broadcast_at_thread_exit.to_broadcast);
 #endif
 }
+#endif
 
 #if _MSVCP_VER >= 140
 LONGLONG __cdecl _Query_perf_counter(void)

@@ -7551,7 +7551,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr ""
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr ""
 
@@ -11825,6 +11825,12 @@ msgstr ""
 #| msgid "Error: Unable to terminate process \"%1\".\n"
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "Chyba: Nemožno ukončiť proces \"%1\".\n"
+
+#: regedit.rc:398
+#, fuzzy
+#| msgid "No command was specified."
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr "Nebol špecifikovaný žiadny príkaz."
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

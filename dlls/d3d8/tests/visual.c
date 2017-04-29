@@ -4069,7 +4069,11 @@ static void shadow_test(void)
         for (j = 0; j < sizeof(expected_colors) / sizeof(*expected_colors); ++j)
         {
             D3DCOLOR color = get_readback_color(&rb, expected_colors[j].x, expected_colors[j].y);
-            ok(color_match(color, expected_colors[j].color, 0),
+            /* Geforce 7 on Windows returns 1.0 in alpha when the depth format is D24S8 or D24X8,
+             * whereas other GPUs (all AMD, newer Nvidia) return the same value they return in .rgb.
+             * Accept alpha mismatches as broken but make sure to check the color channels. */
+            ok(color_match(color, expected_colors[j].color, 0)
+                    || broken(color_match(color & 0x00ffffff, expected_colors[j].color & 0x00ffffff, 0)),
                     "Expected color 0x%08x at (%u, %u) for format %s, got 0x%08x.\n",
                     expected_colors[j].color, expected_colors[j].x, expected_colors[j].y,
                     formats[i].name, color);
@@ -5219,7 +5223,7 @@ static void add_dirty_rect_test(void)
     IDirect3DTexture8 *tex_dst1, *tex_dst2, *tex_src_red, *tex_src_green,
         *tex_managed, *tex_dynamic;
     IDirect3DSurface8 *surface_dst2, *surface_src_green, *surface_src_red,
-        *surface_managed, *surface_dynamic;
+        *surface_managed0, *surface_managed1, *surface_dynamic;
     D3DLOCKED_RECT locked_rect;
     IDirect3DDevice8 *device;
     IDirect3D8 *d3d;
@@ -5253,7 +5257,7 @@ static void add_dirty_rect_test(void)
     hr = IDirect3DDevice8_CreateTexture(device, 256, 256, 1, 0, D3DFMT_X8R8G8B8,
             D3DPOOL_SYSTEMMEM, &tex_src_green);
     ok(SUCCEEDED(hr), "Failed to create texture, hr %#x.\n", hr);
-    hr = IDirect3DDevice8_CreateTexture(device, 256, 256, 1, 0, D3DFMT_X8R8G8B8,
+    hr = IDirect3DDevice8_CreateTexture(device, 256, 256, 2, 0, D3DFMT_X8R8G8B8,
             D3DPOOL_MANAGED, &tex_managed);
     ok(SUCCEEDED(hr), "Failed to create texture, hr %#x.\n", hr);
     hr = IDirect3DDevice8_CreateTexture(device, 256, 256, 1, D3DUSAGE_DYNAMIC,
@@ -5266,7 +5270,9 @@ static void add_dirty_rect_test(void)
     ok(SUCCEEDED(hr), "Failed to get surface level, hr %#x.\n", hr);
     hr = IDirect3DTexture8_GetSurfaceLevel(tex_src_red, 0, &surface_src_red);
     ok(SUCCEEDED(hr), "Failed to get surface level, hr %#x.\n", hr);
-    hr = IDirect3DTexture8_GetSurfaceLevel(tex_managed, 0, &surface_managed);
+    hr = IDirect3DTexture8_GetSurfaceLevel(tex_managed, 0, &surface_managed0);
+    ok(SUCCEEDED(hr), "Failed to get surface level, hr %#x.\n", hr);
+    hr = IDirect3DTexture8_GetSurfaceLevel(tex_managed, 1, &surface_managed1);
     ok(SUCCEEDED(hr), "Failed to get surface level, hr %#x.\n", hr);
     hr = IDirect3DTexture8_GetSurfaceLevel(tex_dynamic, 0, &surface_dynamic);
     ok(SUCCEEDED(hr), "Failed to get surface level, hr %#x.\n", hr);
@@ -5280,6 +5286,8 @@ static void add_dirty_rect_test(void)
     ok(SUCCEEDED(hr), "Failed to set color op, hr %#x.\n", hr);
     hr = IDirect3DDevice8_SetTextureStageState(device, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
     ok(SUCCEEDED(hr), "Failed to set color arg, hr %#x.\n", hr);
+    hr = IDirect3DDevice8_SetTextureStageState(device, 0, D3DTSS_MIPFILTER, D3DTEXF_POINT);
+    ok(SUCCEEDED(hr), "Failed to set mip filter, hr %#x.\n", hr);
 
     hr = IDirect3DDevice8_UpdateTexture(device, (IDirect3DBaseTexture8 *)tex_src_green,
             (IDirect3DBaseTexture8 *)tex_dst1);
@@ -5463,7 +5471,8 @@ static void add_dirty_rect_test(void)
     ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
 
     /* Tests with managed textures. */
-    fill_surface(surface_managed, 0x00ff0000, 0);
+    fill_surface(surface_managed0, 0x00ff0000, 0);
+    fill_surface(surface_managed1, 0x00ff0000, 0);
     hr = IDirect3DDevice8_SetTexture(device, 0, (IDirect3DBaseTexture8 *)tex_managed);
     ok(SUCCEEDED(hr), "Failed to set texture, hr %#x.\n", hr);
     add_dirty_rect_test_draw(device);
@@ -5472,13 +5481,28 @@ static void add_dirty_rect_test(void)
             "Expected color 0x00ff0000, got 0x%08x.\n", color);
     hr = IDirect3DDevice8_Present(device, NULL, NULL, NULL, NULL);
     ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
+    hr = IDirect3DDevice8_SetTextureStageState(device, 0, D3DTSS_MAXMIPLEVEL, 1);
+    ok(SUCCEEDED(hr), "Failed to set texture stage state, hr %#x.\n", hr);
+    add_dirty_rect_test_draw(device);
+    color = getPixelColor(device, 320, 240);
+    ok(color_match(color, 0x00ff0000, 1), "Got unexpected color 0x%08x.\n", color);
+    hr = IDirect3DDevice8_Present(device, NULL, NULL, NULL, NULL);
+    ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
 
     /* Managed textures also honor D3DLOCK_NO_DIRTY_UPDATE. */
-    fill_surface(surface_managed, 0x0000ff00, D3DLOCK_NO_DIRTY_UPDATE);
+    fill_surface(surface_managed0, 0x0000ff00, D3DLOCK_NO_DIRTY_UPDATE);
+    fill_surface(surface_managed1, 0x000000ff, D3DLOCK_NO_DIRTY_UPDATE);
     add_dirty_rect_test_draw(device);
     color = getPixelColor(device, 320, 240);
     ok(color_match(color, 0x00ff0000, 1),
             "Expected color 0x00ff0000, got 0x%08x.\n", color);
+    hr = IDirect3DDevice8_Present(device, NULL, NULL, NULL, NULL);
+    ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
+    hr = IDirect3DDevice8_SetTextureStageState(device, 0, D3DTSS_MAXMIPLEVEL, 0);
+    ok(SUCCEEDED(hr), "Failed to set texture stage state, hr %#x.\n", hr);
+    add_dirty_rect_test_draw(device);
+    color = getPixelColor(device, 320, 240);
+    ok(color_match(color, 0x00ff0000, 1), "Got unexpected color 0x%08x.\n", color);
     hr = IDirect3DDevice8_Present(device, NULL, NULL, NULL, NULL);
     ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
 
@@ -5494,15 +5518,29 @@ static void add_dirty_rect_test(void)
             "Expected color 0x0000ff00, got 0x%08x.\n", color);
     hr = IDirect3DDevice8_Present(device, NULL, NULL, NULL, NULL);
     ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
+    hr = IDirect3DDevice8_SetTextureStageState(device, 0, D3DTSS_MAXMIPLEVEL, 1);
+    ok(SUCCEEDED(hr), "Failed to set texture stage state, hr %#x.\n", hr);
+    add_dirty_rect_test_draw(device);
+    color = getPixelColor(device, 320, 240);
+    ok(color_match(color, 0x000000ff, 1), "Got unexpected color 0x%08x.\n", color);
+    hr = IDirect3DDevice8_Present(device, NULL, NULL, NULL, NULL);
+    ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
 
     /* So does ResourceManagerDiscardBytes. */
-    fill_surface(surface_managed, 0x000000ff, D3DLOCK_NO_DIRTY_UPDATE);
+    fill_surface(surface_managed0, 0x00ffff00, D3DLOCK_NO_DIRTY_UPDATE);
+    fill_surface(surface_managed1, 0x00ff00ff, D3DLOCK_NO_DIRTY_UPDATE);
     hr = IDirect3DDevice8_ResourceManagerDiscardBytes(device, 0);
     ok(SUCCEEDED(hr), "Failed to evict managed resources, hr %#x.\n", hr);
     add_dirty_rect_test_draw(device);
     color = getPixelColor(device, 320, 240);
-    ok(color_match(color, 0x000000ff, 1),
-            "Expected color 0x000000ff, got 0x%08x.\n", color);
+    ok(color_match(color, 0x00ff00ff, 1), "Got unexpected color 0x%08x.\n", color);
+    hr = IDirect3DDevice8_Present(device, NULL, NULL, NULL, NULL);
+    ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
+    hr = IDirect3DDevice8_SetTextureStageState(device, 0, D3DTSS_MAXMIPLEVEL, 0);
+    ok(SUCCEEDED(hr), "Failed to set texture stage state, hr %#x.\n", hr);
+    add_dirty_rect_test_draw(device);
+    color = getPixelColor(device, 320, 240);
+    ok(color_match(color, 0x00ffff00, 1), "Got unexpected color 0x%08x.\n", color);
     hr = IDirect3DDevice8_Present(device, NULL, NULL, NULL, NULL);
     ok(SUCCEEDED(hr), "Failed to present, hr %#x.\n", hr);
 
@@ -5541,7 +5579,8 @@ static void add_dirty_rect_test(void)
     ok(SUCCEEDED(hr), "Failed to add dirty rect, hr %#x.\n", hr);
 
     IDirect3DSurface8_Release(surface_dst2);
-    IDirect3DSurface8_Release(surface_managed);
+    IDirect3DSurface8_Release(surface_managed1);
+    IDirect3DSurface8_Release(surface_managed0);
     IDirect3DSurface8_Release(surface_src_red);
     IDirect3DSurface8_Release(surface_src_green);
     IDirect3DSurface8_Release(surface_dynamic);
@@ -8198,21 +8237,27 @@ static void test_uninitialized_varyings(void)
         const DWORD *ps;
         D3DCOLOR expected;
         BOOL allow_zero_alpha;
+        BOOL partial;
         BOOL broken_warp;
     }
     /* On AMD specular color is generally initialized to 0x00000000 and texcoords to 0xff000000
-     * while on Nvidia it's the opposite. Just allow both. */
+     * while on Nvidia it's the opposite. Just allow both.
+     *
+     * Partially initialized varyings reliably handle the component that has been initialized.
+     * The uninitialized components generally follow the rule above, with some exceptions on
+     * radeon cards. r500 and r600 GPUs have been found to set uninitialized components to 0.0,
+     * 0.5 and 1.0 without a sensible pattern. */
     tests[] =
     {
         {D3DVS_VERSION(1, 1),         vs1_code,                   0,              NULL, 0xffffffff},
         {                  0,             NULL, D3DPS_VERSION(1, 1), ps1_texcoord_code, 0xff000000, TRUE},
         {D3DVS_VERSION(1, 1),         vs1_code, D3DPS_VERSION(1, 1),  ps1_diffuse_code, 0xffffffff},
-        {D3DVS_VERSION(1, 1),         vs1_code, D3DPS_VERSION(1, 1), ps1_specular_code, 0xff000000, TRUE,  TRUE},
+        {D3DVS_VERSION(1, 1),         vs1_code, D3DPS_VERSION(1, 1), ps1_specular_code, 0xff000000, TRUE,  FALSE, TRUE},
         {D3DVS_VERSION(1, 1),         vs1_code, D3DPS_VERSION(1, 1), ps1_texcoord_code, 0xff000000, TRUE},
         {D3DVS_VERSION(1, 1), vs1_partial_code,                   0,              NULL, 0xff7fffff, FALSE, TRUE},
         {D3DVS_VERSION(1, 1), vs1_partial_code, D3DPS_VERSION(1, 1),  ps1_diffuse_code, 0xff7fffff, FALSE, TRUE},
-        {D3DVS_VERSION(1, 1), vs1_partial_code, D3DPS_VERSION(1, 1), ps1_specular_code, 0xff7f0000, TRUE},
-        {D3DVS_VERSION(1, 1), vs1_partial_code, D3DPS_VERSION(1, 1), ps1_texcoord_code, 0xff7f0000, TRUE},
+        {D3DVS_VERSION(1, 1), vs1_partial_code, D3DPS_VERSION(1, 1), ps1_specular_code, 0xff7f0000, TRUE,  TRUE},
+        {D3DVS_VERSION(1, 1), vs1_partial_code, D3DPS_VERSION(1, 1), ps1_texcoord_code, 0xff7f0000, TRUE,  TRUE},
     };
     IDirect3DDevice8 *device;
     IDirect3D8 *d3d;
@@ -8316,7 +8361,8 @@ static void test_uninitialized_varyings(void)
         color = get_readback_color(&rb, 320, 240);
         ok(color_match(color, tests[i].expected, 1)
                 || (tests[i].allow_zero_alpha && color_match(color, tests[i].expected & 0x00ffffff, 1))
-                || (broken(warp && tests[i].broken_warp)),
+                || (broken(warp && tests[i].broken_warp))
+                || broken(tests[i].partial && color_match(color & 0x00ff0000, tests[i].expected & 0x00ff0000, 1)),
                 "Got unexpected color 0x%08x, case %u.\n", color, i);
         release_surface_readback(&rb);
 

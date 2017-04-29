@@ -33,13 +33,13 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
-typedef struct {
+struct HTMLSelectElement {
     HTMLElement element;
 
     IHTMLSelectElement IHTMLSelectElement_iface;
 
     nsIDOMHTMLSelectElement *nsselect;
-} HTMLSelectElement;
+};
 
 static inline HTMLSelectElement *impl_from_IHTMLSelectElement(IHTMLSelectElement *iface)
 {
@@ -689,6 +689,7 @@ static void HTMLSelectElement_unlink(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLSelectElementImplVtbl = {
+    &CLSID_HTMLSelectElement,
     HTMLSelectElement_QI,
     HTMLElement_destructor,
     HTMLElement_cpc,

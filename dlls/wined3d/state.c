@@ -60,13 +60,24 @@ ULONG CDECL wined3d_rasterizer_state_decref(struct wined3d_rasterizer_state *sta
     TRACE("%p decreasing refcount to %u.\n", state, refcount);
 
     if (!refcount)
+    {
+        state->parent_ops->wined3d_object_destroyed(state->parent);
         wined3d_cs_destroy_object(device->cs, wined3d_rasterizer_state_destroy_object, state);
+    }
 
     return refcount;
 }
 
+void * CDECL wined3d_rasterizer_state_get_parent(const struct wined3d_rasterizer_state *state)
+{
+    TRACE("rasterizer_state %p.\n", state);
+
+    return state->parent;
+}
+
 HRESULT CDECL wined3d_rasterizer_state_create(struct wined3d_device *device,
-        const struct wined3d_rasterizer_state_desc *desc, struct wined3d_rasterizer_state **state)
+        const struct wined3d_rasterizer_state_desc *desc, void *parent,
+        const struct wined3d_parent_ops *parent_ops, struct wined3d_rasterizer_state **state)
 {
     struct wined3d_rasterizer_state *object;
 
@@ -77,6 +88,8 @@ HRESULT CDECL wined3d_rasterizer_state_create(struct wined3d_device *device,
 
     object->refcount = 1;
     object->desc = *desc;
+    object->parent = parent;
+    object->parent_ops = parent_ops;
     object->device = device;
 
     TRACE("Created rasterizer state %p.\n", object);
@@ -448,22 +461,9 @@ static void state_blend(struct wined3d_context *context, const struct wined3d_st
 {
     const struct wined3d_gl_info *gl_info = context->gl_info;
     const struct wined3d_format *rt_format;
-    BOOL enable_blend, enable_line_smooth;
     GLenum src_blend, dst_blend;
     unsigned int rt_fmt_flags;
-
-    enable_line_smooth = state->render_states[WINED3D_RS_EDGEANTIALIAS]
-            || state->render_states[WINED3D_RS_ANTIALIASEDLINEENABLE];
-    if (enable_line_smooth)
-    {
-        gl_info->gl_ops.gl.p_glEnable(GL_LINE_SMOOTH);
-        checkGLcall("glEnable(GL_LINE_SMOOTH)");
-    }
-    else
-    {
-        gl_info->gl_ops.gl.p_glDisable(GL_LINE_SMOOTH);
-        checkGLcall("glDisable(GL_LINE_SMOOTH)");
-    }
+    BOOL enable_blend;
 
     enable_blend = state->fb->render_targets[0] && state->render_states[WINED3D_RS_ALPHABLENDENABLE];
     if (enable_blend)
@@ -478,33 +478,19 @@ static void state_blend(struct wined3d_context *context, const struct wined3d_st
             enable_blend = FALSE;
     }
 
-    if (enable_blend)
-    {
-        gl_info->gl_ops.gl.p_glEnable(GL_BLEND);
-        checkGLcall("glEnable(GL_BLEND)");
-    }
-    else
+    if (!enable_blend)
     {
         gl_info->gl_ops.gl.p_glDisable(GL_BLEND);
         checkGLcall("glDisable(GL_BLEND)");
-        if (enable_line_smooth)
-            WARN("LINE/EDGEANTIALIAS enabled with disabled blending.\n");
         return;
     }
+
+    gl_info->gl_ops.gl.p_glEnable(GL_BLEND);
+    checkGLcall("glEnable(GL_BLEND)");
 
     gl_blend_from_d3d(&src_blend, &dst_blend,
             state->render_states[WINED3D_RS_SRCBLEND],
             state->render_states[WINED3D_RS_DESTBLEND], rt_format);
-
-    /* According to the red book, GL_LINE_SMOOTH needs GL_BLEND with specific
-     * blending parameters to work. */
-    if (enable_line_smooth)
-    {
-        if (src_blend != GL_SRC_ALPHA)
-            WARN("LINE/EDGEANTIALIAS enabled, but unexpected src blending param.\n");
-        if (dst_blend != GL_ONE_MINUS_SRC_ALPHA && dst_blend != GL_ONE)
-            WARN("LINE/EDGEANTIALIAS enabled, but unexpected dst blending param.\n");
-    }
 
     /* Re-apply BLENDOP(ALPHA) because of a possible SEPARATEALPHABLENDENABLE change */
     if (!isStateDirty(context, STATE_RENDER(WINED3D_RS_BLENDOP)))
@@ -1664,6 +1650,23 @@ static void state_msaa(struct wined3d_context *context, const struct wined3d_sta
     {
         gl_info->gl_ops.gl.p_glDisable(GL_MULTISAMPLE_ARB);
         checkGLcall("glDisable(GL_MULTISAMPLE_ARB)");
+    }
+}
+
+static void state_line_antialias(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
+{
+    const struct wined3d_gl_info *gl_info = context->gl_info;
+
+    if (state->render_states[WINED3D_RS_EDGEANTIALIAS]
+            || state->render_states[WINED3D_RS_ANTIALIASEDLINEENABLE])
+    {
+        gl_info->gl_ops.gl.p_glEnable(GL_LINE_SMOOTH);
+        checkGLcall("glEnable(GL_LINE_SMOOTH)");
+    }
+    else
+    {
+        gl_info->gl_ops.gl.p_glDisable(GL_LINE_SMOOTH);
+        checkGLcall("glDisable(GL_LINE_SMOOTH)");
     }
 }
 
@@ -3626,7 +3629,7 @@ static void sampler(struct wined3d_context *context, const struct wined3d_state 
         }
         else
         {
-            if (FAILED(wined3d_sampler_create(device, &desc, NULL, &sampler)))
+            if (FAILED(wined3d_sampler_create(device, &desc, NULL, &wined3d_null_parent_ops, &sampler)))
             {
                 ERR("Failed to create sampler.\n");
                 return;
@@ -4982,6 +4985,8 @@ static void state_so(struct wined3d_context *context, const struct wined3d_state
 
     TRACE("context %p, state %p, state_id %#x.\n", context, state, state_id);
 
+    context_end_transform_feedback(context);
+
     for (i = 0; i < ARRAY_SIZE(state->stream_output); ++i)
     {
         if (!(buffer = state->stream_output[i].buffer))
@@ -5012,6 +5017,10 @@ const struct StateEntryTemplate misc_state_template[] =
 {
     { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_VERTEX),  { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_VERTEX),  state_cb,           }, ARB_UNIFORM_BUFFER_OBJECT       },
     { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_VERTEX),  { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_VERTEX),  state_cb_warn,      }, WINED3D_GL_EXT_NONE             },
+    { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_HULL),    { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_HULL),    state_cb,           }, ARB_UNIFORM_BUFFER_OBJECT       },
+    { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_HULL),    { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_HULL),    state_cb_warn,      }, WINED3D_GL_EXT_NONE             },
+    { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_DOMAIN),  { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_DOMAIN),  state_cb,           }, ARB_UNIFORM_BUFFER_OBJECT       },
+    { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_DOMAIN),  { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_DOMAIN),  state_cb_warn,      }, WINED3D_GL_EXT_NONE             },
     { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_GEOMETRY),{ STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_GEOMETRY),state_cb,           }, ARB_UNIFORM_BUFFER_OBJECT       },
     { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_GEOMETRY),{ STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_GEOMETRY),state_cb_warn,      }, WINED3D_GL_EXT_NONE             },
     { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_PIXEL),   { STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_PIXEL),   state_cb,           }, ARB_UNIFORM_BUFFER_OBJECT       },
@@ -5029,8 +5038,8 @@ const struct StateEntryTemplate misc_state_template[] =
     { STATE_RENDER(WINED3D_RS_SRCBLEND),                  { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          NULL                }, WINED3D_GL_EXT_NONE             },
     { STATE_RENDER(WINED3D_RS_DESTBLEND),                 { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          NULL                }, WINED3D_GL_EXT_NONE             },
     { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          state_blend         }, WINED3D_GL_EXT_NONE             },
-    { STATE_RENDER(WINED3D_RS_EDGEANTIALIAS),             { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          NULL                }, WINED3D_GL_EXT_NONE             },
-    { STATE_RENDER(WINED3D_RS_ANTIALIASEDLINEENABLE),     { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          NULL                }, WINED3D_GL_EXT_NONE             },
+    { STATE_RENDER(WINED3D_RS_EDGEANTIALIAS),             { STATE_RENDER(WINED3D_RS_EDGEANTIALIAS),             state_line_antialias}, WINED3D_GL_EXT_NONE             },
+    { STATE_RENDER(WINED3D_RS_ANTIALIASEDLINEENABLE),     { STATE_RENDER(WINED3D_RS_ANTIALIASEDLINEENABLE),     state_line_antialias}, WINED3D_GL_EXT_NONE             },
     { STATE_RENDER(WINED3D_RS_SEPARATEALPHABLENDENABLE),  { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          NULL                }, WINED3D_GL_EXT_NONE             },
     { STATE_RENDER(WINED3D_RS_SRCBLENDALPHA),             { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          NULL                }, WINED3D_GL_EXT_NONE             },
     { STATE_RENDER(WINED3D_RS_DESTBLENDALPHA),            { STATE_RENDER(WINED3D_RS_ALPHABLENDENABLE),          NULL                }, WINED3D_GL_EXT_NONE             },
@@ -5215,6 +5224,8 @@ const struct StateEntryTemplate misc_state_template[] =
     { STATE_BASEVERTEXINDEX,                              { STATE_STREAMSRC,                                    NULL,               }, WINED3D_GL_EXT_NONE             },
     { STATE_FRAMEBUFFER,                                  { STATE_FRAMEBUFFER,                                  context_state_fb    }, WINED3D_GL_EXT_NONE             },
     { STATE_SHADER(WINED3D_SHADER_TYPE_PIXEL),            { STATE_SHADER(WINED3D_SHADER_TYPE_PIXEL),            context_state_drawbuf},WINED3D_GL_EXT_NONE             },
+    { STATE_SHADER(WINED3D_SHADER_TYPE_HULL),             { STATE_SHADER(WINED3D_SHADER_TYPE_HULL),             state_shader        }, WINED3D_GL_EXT_NONE             },
+    { STATE_SHADER(WINED3D_SHADER_TYPE_DOMAIN),           { STATE_SHADER(WINED3D_SHADER_TYPE_DOMAIN),           state_shader        }, WINED3D_GL_EXT_NONE             },
     { STATE_SHADER(WINED3D_SHADER_TYPE_GEOMETRY),         { STATE_SHADER(WINED3D_SHADER_TYPE_GEOMETRY),         state_shader        }, WINED3D_GL_EXT_NONE             },
     { STATE_SHADER(WINED3D_SHADER_TYPE_COMPUTE),          { STATE_SHADER(WINED3D_SHADER_TYPE_COMPUTE),          state_compute_shader}, WINED3D_GL_EXT_NONE             },
     {0 /* Terminate */,                                   { 0,                                                  0                   }, WINED3D_GL_EXT_NONE             },
@@ -5996,10 +6007,14 @@ static void validate_state_table(struct StateEntry *state_table)
         STATE_STREAMSRC,
         STATE_INDEXBUFFER,
         STATE_SHADER(WINED3D_SHADER_TYPE_VERTEX),
+        STATE_SHADER(WINED3D_SHADER_TYPE_HULL),
+        STATE_SHADER(WINED3D_SHADER_TYPE_DOMAIN),
         STATE_SHADER(WINED3D_SHADER_TYPE_GEOMETRY),
         STATE_SHADER(WINED3D_SHADER_TYPE_PIXEL),
         STATE_SHADER(WINED3D_SHADER_TYPE_COMPUTE),
         STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_VERTEX),
+        STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_HULL),
+        STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_DOMAIN),
         STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_GEOMETRY),
         STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_PIXEL),
         STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_COMPUTE),

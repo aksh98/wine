@@ -32,6 +32,15 @@ static NSString* const WineAppWaitQueryResponseMode = @"WineAppWaitQueryResponse
 int macdrv_err_on;
 
 
+#if !defined(MAC_OS_X_VERSION_10_12) || MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_12
+@interface NSWindow (WineAutoTabbingExtensions)
+
+    + (void) setAllowsAutomaticWindowTabbing:(BOOL)allows;
+
+@end
+#endif
+
+
 /***********************************************************************
  *              WineLocalizedString
  *
@@ -124,6 +133,9 @@ static NSString* WineLocalizedString(unsigned int stringID)
                                       [NSNumber numberWithBool:NO], @"ApplePressAndHoldEnabled",
                                       nil];
             [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
+
+            if ([NSWindow respondsToSelector:@selector(setAllowsAutomaticWindowTabbing:)])
+                [NSWindow setAllowsAutomaticWindowTabbing:NO];
         }
     }
 
@@ -1653,7 +1665,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
 
         if ([window isKindOfClass:[WineWindow class]] &&
             type == NSLeftMouseDown &&
-            (([theEvent modifierFlags] & (NSShiftKeyMask | NSControlKeyMask| NSAlternateKeyMask | NSCommandKeyMask)) != NSCommandKeyMask))
+            ![theEvent wine_commandKeyDown])
         {
             NSWindowButton windowButton;
 
@@ -1973,6 +1985,17 @@ static NSString* WineLocalizedString(unsigned int stringID)
             [self handleScrollWheel:anEvent];
             ret = mouseCaptureWindow != nil;
         }
+        else if (type == NSKeyDown)
+        {
+            // -[NSApplication sendEvent:] seems to consume presses of the Help
+            // key (Insert key on PC keyboards), so we have to bypass it and
+            // send the event directly to the window.
+            if (anEvent.keyCode == kVK_Help)
+            {
+                [anEvent.window sendEvent:anEvent];
+                ret = TRUE;
+            }
+        }
         else if (type == NSKeyUp)
         {
             uint16_t keyCode = [anEvent keyCode];
@@ -2012,6 +2035,8 @@ static NSString* WineLocalizedString(unsigned int stringID)
                     [self updateCursorClippingState];
 
                     event = macdrv_create_event(eventType, window);
+                    if (eventType == WINDOW_DRAG_BEGIN)
+                        event->window_drag_begin.no_activate = [NSEvent wine_commandKeyDown];
                     [window.queue postEvent:event];
                     macdrv_release_event(event);
                 }

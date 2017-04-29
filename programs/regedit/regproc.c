@@ -52,7 +52,6 @@ static HKEY reg_class_keys[] = {
 
 /* return values */
 #define NOT_ENOUGH_MEMORY     1
-#define IO_ERROR              2
 
 /* processing macros */
 
@@ -147,15 +146,31 @@ static char* GetMultiByteStringN(const WCHAR* strW, int chars, DWORD* len)
  */
 static BOOL convertHexToDWord(WCHAR* str, DWORD *dw)
 {
-    char buf[9];
-    char dummy;
+    WCHAR *p, *end;
+    int count = 0;
 
-    WideCharToMultiByte(CP_ACP, 0, str, -1, buf, 9, NULL, NULL);
-    if (lstrlenW(str) > 8 || sscanf(buf, "%x%c", dw, &dummy) != 1) {
-        output_message(STRING_INVALID_HEX);
-        return FALSE;
+    while (*str == ' ' || *str == '\t') str++;
+    if (!*str) goto error;
+
+    p = str;
+    while (isxdigitW(*p))
+    {
+        count++;
+        p++;
     }
+    if (count > 8) goto error;
+
+    end = p;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p && *p != ';') goto error;
+
+    *end = 0;
+    *dw = strtoulW(str, &end, 16);
     return TRUE;
+
+error:
+    output_message(STRING_INVALID_HEX);
+    return FALSE;
 }
 
 /******************************************************************************
@@ -249,13 +264,19 @@ static DWORD getDataType(LPWSTR *lpValue, DWORD* parse_type)
 }
 
 /******************************************************************************
- * Replaces escape sequences with the characters.
+ * Replaces escape sequences with their character equivalents and
+ * null-terminates the string on the first non-escaped double quote.
+ *
+ * Assigns a pointer to the remaining unparsed data in the line.
+ * Returns TRUE or FALSE to indicate whether a closing double quote was found.
  */
-static int REGPROC_unescape_string(WCHAR* str)
+static BOOL REGPROC_unescape_string(WCHAR *str, WCHAR **unparsed)
 {
     int str_idx = 0;            /* current character under analysis */
     int val_idx = 0;            /* the last character of the unescaped string */
     int len = lstrlenW(str);
+    BOOL ret;
+
     for (str_idx = 0; str_idx < len; str_idx++, val_idx++) {
         if (str[str_idx] == '\\') {
             str_idx++;
@@ -278,58 +299,40 @@ static int REGPROC_unescape_string(WCHAR* str)
                 str[val_idx] = str[str_idx];
                 break;
             }
+        } else if (str[str_idx] == '"') {
+            break;
         } else {
             str[val_idx] = str[str_idx];
         }
     }
+
+    ret = (str[str_idx] == '"');
+    *unparsed = str + str_idx + 1;
     str[val_idx] = '\0';
-    return val_idx;
+    return ret;
 }
 
-static BOOL parseKeyName(LPWSTR lpKeyName, HKEY *hKey, LPWSTR *lpKeyPath)
+static HKEY parseKeyName(LPWSTR lpKeyName, LPWSTR *lpKeyPath)
 {
-    WCHAR* lpSlash = NULL;
-    unsigned int i, len;
+    unsigned int i;
 
     if (lpKeyName == NULL)
-        return FALSE;
+        return 0;
 
-    for(i = 0; *(lpKeyName+i) != 0; i++)
+    *lpKeyPath = strchrW(lpKeyName, '\\');
+    if (*lpKeyPath) (*lpKeyPath)++;
+
+    for (i = 0; i < ARRAY_SIZE(reg_class_keys); i++)
     {
-        if(*(lpKeyName+i) == '\\')
+        int len = lstrlenW(reg_class_namesW[i]);
+        if (!strncmpW(lpKeyName, reg_class_namesW[i], len) &&
+           (lpKeyName[len] == 0 || lpKeyName[len] == '\\'))
         {
-            lpSlash = lpKeyName+i;
-            break;
+            return reg_class_keys[i];
         }
     }
 
-    if (lpSlash)
-    {
-        len = lpSlash-lpKeyName;
-    }
-    else
-    {
-        len = lstrlenW(lpKeyName);
-        lpSlash = lpKeyName+len;
-    }
-    *hKey = NULL;
-
-    for (i = 0; i < ARRAY_SIZE(reg_class_keys); i++) {
-        if (CompareStringW(LOCALE_USER_DEFAULT, 0, lpKeyName, len, reg_class_namesW[i], -1) == CSTR_EQUAL &&
-            len == lstrlenW(reg_class_namesW[i])) {
-            *hKey = reg_class_keys[i];
-            break;
-        }
-    }
-
-    if (*hKey == NULL)
-        return FALSE;
-
-
-    if (*lpSlash != '\0')
-        lpSlash++;
-    *lpKeyPath = lpSlash;
-    return TRUE;
+    return 0;
 }
 
 /* Globals used by the setValue() & co */
@@ -345,7 +348,6 @@ static const WCHAR type_dword[] = {'R','E','G','_','D','W','O','R','D',0};
 static const WCHAR type_dword_le[] = {'R','E','G','_','D','W','O','R','D','_','L','I','T','T','L','E','_','E','N','D','I','A','N',0};
 static const WCHAR type_dword_be[] = {'R','E','G','_','D','W','O','R','D','_','B','I','G','_','E','N','D','I','A','N',0};
 static const WCHAR type_multi_sz[] = {'R','E','G','_','M','U','L','T','I','_','S','Z',0};
-static const WCHAR unknown_type[] = {'U','n','k','n','o','w','n',' ','T','y','p','e',0};
 
 static const struct
 {
@@ -362,7 +364,6 @@ type_rels[] =
     {REG_DWORD_LITTLE_ENDIAN, type_dword_le},
     {REG_DWORD_BIG_ENDIAN, type_dword_be},
     {REG_MULTI_SZ, type_multi_sz},
-    {REG_UNKNOWN_TYPE, unknown_type}
 };
 
 static const WCHAR *reg_type_to_wchar(DWORD type)
@@ -407,12 +408,14 @@ static LONG setValue(WCHAR* val_name, WCHAR* val_data, BOOL is_unicode)
 
     if (dwParseType == REG_SZ)          /* no conversion for string */
     {
-        dwLen = REGPROC_unescape_string(val_data);
-        if(!dwLen || val_data[dwLen-1] != '"')
+        WCHAR *line;
+        if (!REGPROC_unescape_string(val_data, &line))
             return ERROR_INVALID_DATA;
-        val_data[dwLen-1] = '\0'; /* remove last quotes */
+        while (*line == ' ' || *line == '\t') line++;
+        if (*line && *line != ';')
+            return ERROR_INVALID_DATA;
         lpbData = (BYTE*) val_data;
-        dwLen = dwLen * sizeof(WCHAR); /* size is in bytes */
+        dwLen = (lstrlenW(val_data) + 1) * sizeof(WCHAR); /* size is in bytes */
     }
     else if (dwParseType == REG_DWORD)  /* Convert the dword types */
     {
@@ -437,7 +440,15 @@ static LONG setValue(WCHAR* val_name, WCHAR* val_data, BOOL is_unicode)
     }
     else                                /* unknown format */
     {
-        output_message(STRING_UNKNOWN_DATA_FORMAT, reg_type_to_wchar(dwDataType));
+        if (dwDataType == REG_UNKNOWN_TYPE)
+        {
+            WCHAR buf[32];
+            LoadStringW(GetModuleHandleW(NULL), STRING_UNKNOWN_TYPE, buf, ARRAY_SIZE(buf));
+            output_message(STRING_UNKNOWN_DATA_FORMAT, buf);
+        }
+        else
+            output_message(STRING_UNKNOWN_DATA_FORMAT, reg_type_to_wchar(dwDataType));
+
         return ERROR_INVALID_DATA;
     }
 
@@ -469,7 +480,7 @@ static LONG openKeyW(WCHAR* stdInput)
         return ERROR_INVALID_PARAMETER;
 
     /* Get the registry class */
-    if (!parseKeyName(stdInput, &keyClass, &keyPath))
+    if (!(keyClass = parseKeyName(stdInput, &keyPath)))
         return ERROR_INVALID_PARAMETER;
 
     res = RegCreateKeyExW(
@@ -520,62 +531,37 @@ static void closeKey(void)
  */
 static void processSetValue(WCHAR* line, BOOL is_unicode)
 {
-    WCHAR* val_name;                   /* registry value name   */
-    WCHAR* val_data;                   /* registry value data   */
-    int line_idx = 0;                 /* current character under analysis */
+    WCHAR *val_name;
+    int len = 0;
     LONG res;
 
     /* get value name */
-    while ( isspaceW(line[line_idx]) ) line_idx++;
-    if (line[line_idx] == '@' && line[line_idx + 1] == '=') {
-        line[line_idx] = '\0';
-        val_name = line;
-        line_idx++;
-    } else if (line[line_idx] == '\"') {
-        line_idx++;
-        val_name = line + line_idx;
-        while (line[line_idx]) {
-            if (line[line_idx] == '\\')   /* skip escaped character */
-            {
-                line_idx += 2;
-            } else {
-                if (line[line_idx] == '\"') {
-                    line[line_idx] = '\0';
-                    line_idx++;
-                    break;
-                } else {
-                    line_idx++;
-                }
-            }
-        }
-        while ( isspaceW(line[line_idx]) ) line_idx++;
-        if (!line[line_idx]) {
-            output_message(STRING_UNEXPECTED_EOL, line);
-            return;
-        }
-        if (line[line_idx] != '=') {
-            line[line_idx] = '\"';
-            output_message(STRING_UNRECOGNIZED_LINE, line);
-            return;
-        }
+    val_name = line;
 
-    } else {
-        output_message(STRING_UNRECOGNIZED_LINE, line);
-        return;
-    }
-    line_idx++;                   /* skip the '=' character */
+    if (*line == '@')
+        *line++ = 0;
+    else if (!REGPROC_unescape_string(++val_name, &line))
+        goto error;
 
-    while ( isspaceW(line[line_idx]) ) line_idx++;
-    val_data = line + line_idx;
+    while (*line == ' ' || *line == '\t') line++;
+    if (*line != '=')
+        goto error;
+    line++;
+    while (*line == ' ' || *line == '\t') line++;
+
     /* trim trailing blanks */
-    line_idx = strlenW(val_data);
-    while (line_idx > 0 && isspaceW(val_data[line_idx-1])) line_idx--;
-    val_data[line_idx] = '\0';
+    len = strlenW(line);
+    while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t')) len--;
+    line[len] = 0;
 
-    REGPROC_unescape_string(val_name);
-    res = setValue(val_name, val_data, is_unicode);
+    res = setValue(val_name, line, is_unicode);
     if ( res != ERROR_SUCCESS )
         output_message(STRING_SETVALUE_FAILED, val_name, currentKeyName);
+    return;
+
+error:
+    output_message(STRING_SETVALUE_FAILED, val_name, currentKeyName);
+    output_message(STRING_INVALID_LINE_SYNTAX);
 }
 
 /******************************************************************************
@@ -743,6 +729,7 @@ static char *get_lineA(FILE *fp)
             next = line;
             continue;
         }
+        while (*line == ' ' || *line == '\t') line++;
         if (*line == ';' || *line == '#')
         {
             line = next;
@@ -854,6 +841,7 @@ static WCHAR *get_lineW(FILE *fp)
             next = line;
             continue;
         }
+        while (*line == ' ' || *line == '\t') line++;
         if (*line == ';' || *line == '#')
         {
             line = next;
@@ -1300,7 +1288,7 @@ BOOL export_registry_key(WCHAR *file_name, WCHAR *reg_key_name, DWORD format)
         lstrcpyW(reg_key_name_buf, reg_key_name);
 
         /* open the specified key */
-        if (!parseKeyName(reg_key_name, &reg_key_class, &branch_name)) {
+        if (!(reg_key_class = parseKeyName(reg_key_name, &branch_name))) {
             output_message(STRING_INCORRECT_REG_CLASS, reg_key_name);
             exit(1);
         }
@@ -1385,7 +1373,7 @@ void delete_registry_key(WCHAR *reg_key_name)
     if (!reg_key_name || !reg_key_name[0])
         return;
 
-    if (!parseKeyName(reg_key_name, &key_class, &key_name)) {
+    if (!(key_class = parseKeyName(reg_key_name, &key_name))) {
         output_message(STRING_INCORRECT_REG_CLASS, reg_key_name);
         exit(1);
     }

@@ -237,6 +237,7 @@ static void test_writer_create(void)
     HRESULT hr;
     IXmlWriter *writer;
     LONG_PTR value;
+    IUnknown *unk;
 
     /* crashes native */
     if (0)
@@ -244,6 +245,17 @@ static void test_writer_create(void)
         CreateXmlWriter(&IID_IXmlWriter, NULL, NULL);
         CreateXmlWriter(NULL, (void**)&writer, NULL);
     }
+
+    hr = CreateXmlWriter(&IID_IStream, (void **)&unk, NULL);
+    ok(hr == E_NOINTERFACE, "got %08x\n", hr);
+
+    hr = CreateXmlWriter(&IID_IUnknown, (void **)&unk, NULL);
+    ok(hr == S_OK, "Expected S_OK, got %08x\n", hr);
+    hr = IUnknown_QueryInterface(unk, &IID_IXmlWriter, (void **)&writer);
+    ok(hr == S_OK, "Expected S_OK, got %08x\n", hr);
+    ok(unk == (IUnknown *)writer, "unexpected interface pointer\n");
+    IUnknown_Release(unk);
+    IXmlWriter_Release(writer);
 
     hr = CreateXmlWriter(&IID_IXmlWriter, (void**)&writer, NULL);
     ok(hr == S_OK, "Expected S_OK, got %08x\n", hr);
@@ -275,6 +287,7 @@ static void test_writer_create(void)
 static void test_writeroutput(void)
 {
     static const WCHAR utf16W[] = {'u','t','f','-','1','6',0};
+    static const WCHAR usasciiW[] = {'u','s','-','a','s','c','i','i',0};
     IXmlWriterOutput *output;
     IUnknown *unk;
     HRESULT hr;
@@ -312,14 +325,23 @@ todo_wine
     /* releasing 'unk' crashes on native */
     IUnknown_Release(output);
     IUnknown_Release(output);
+
+    /* create with us-ascii */
+    output = NULL;
+    hr = CreateXmlWriterOutputWithEncodingName(&testoutput, NULL, usasciiW, &output);
+    ok(hr == S_OK, "got %08x\n", hr);
+    IUnknown_Release(output);
 }
 
 static void test_writestartdocument(void)
 {
     static const char fullprolog[] = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>";
+    static const char *prologversion2 = "<?xml version=\"1.0\" encoding=\"uS-asCii\"?>";
     static const char prologversion[] = "<?xml version=\"1.0\"?>";
     static const WCHAR versionW[] = {'v','e','r','s','i','o','n','=','"','1','.','0','"',0};
+    static const WCHAR usasciiW[] = {'u','S','-','a','s','C','i','i',0};
     static const WCHAR xmlW[] = {'x','m','l',0};
+    IXmlWriterOutput *output;
     IXmlWriter *writer;
     IStream *stream;
     HRESULT hr;
@@ -379,6 +401,32 @@ static void test_writestartdocument(void)
 
     IStream_Release(stream);
     IXmlWriter_Release(writer);
+
+    /* create with us-ascii */
+    hr = CreateStreamOnHGlobal(NULL, TRUE, &stream);
+    ok(hr == S_OK, "got 0x%08x\n", hr);
+
+    output = NULL;
+    hr = CreateXmlWriterOutputWithEncodingName((IUnknown *)stream, NULL, usasciiW, &output);
+    ok(hr == S_OK, "got %08x\n", hr);
+
+    hr = CreateXmlWriter(&IID_IXmlWriter, (void **)&writer, NULL);
+    ok(hr == S_OK, "Expected S_OK, got %08x\n", hr);
+
+    hr = IXmlWriter_SetOutput(writer, output);
+    ok(hr == S_OK, "got %08x\n", hr);
+
+    hr = IXmlWriter_WriteStartDocument(writer, XmlStandalone_Omit);
+    ok(hr == S_OK, "got 0x%08x\n", hr);
+
+    hr = IXmlWriter_Flush(writer);
+    ok(hr == S_OK, "got 0x%08x\n", hr);
+
+    CHECK_OUTPUT(stream, prologversion2);
+
+    IStream_Release(stream);
+    IXmlWriter_Release(writer);
+    IUnknown_Release(output);
 }
 
 static void test_flush(void)

@@ -3695,7 +3695,7 @@ msgstr "Odotettiin taulukkoa"
 
 #: ../../include/wine/wine_common_ver.rc:129
 msgid "Wine kernel DLL"
-msgstr ""
+msgstr "Winen ydin-DLL"
 
 #: ../../include/wine/wine_common_ver.rc:134 winemac.rc:32 wineboot.rc:42
 msgid "Wine"
@@ -7533,7 +7533,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr "Lisää leikepöydän sisällön dokumenttiisi."
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr "Tuntematon tyyppi"
 
@@ -12076,6 +12076,10 @@ msgstr "regedit: Ei voida viedä kohdetta '%1'. Rekisteriavainta ei löydy.\n"
 #: regedit.rc:396
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "regedit: Rekisteriluokkaa '%1' ei voida poistaa.\n"
+
+#: regedit.rc:398
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr "regedit: Rivin syntaksi on virheellinen.\n"
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

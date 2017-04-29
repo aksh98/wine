@@ -26,6 +26,7 @@
 #include "winbase.h"
 #include "winuser.h"
 #include "ole2.h"
+#include "mscoree.h"
 
 #include "wine/debug.h"
 
@@ -187,7 +188,7 @@ void release_typelib(void)
     DeleteCriticalSection(&cs_dispex_static_data);
 }
 
-HRESULT get_htmldoc_classinfo(ITypeInfo **typeinfo)
+HRESULT get_class_typeinfo(const CLSID *clsid, ITypeInfo **typeinfo)
 {
     HRESULT hres;
 
@@ -196,7 +197,7 @@ HRESULT get_htmldoc_classinfo(ITypeInfo **typeinfo)
     if (!typelib)
         return hres;
 
-    hres = ITypeLib_GetTypeInfoOfGuid(typelib, &CLSID_HTMLDocument, typeinfo);
+    hres = ITypeLib_GetTypeInfoOfGuid(typelib, clsid, typeinfo);
     if(FAILED(hres))
         ERR("GetTypeInfoOfGuid failed: %08x\n", hres);
     return hres;
@@ -1674,6 +1675,10 @@ BOOL dispex_query_interface(DispatchEx *This, REFIID riid, void **ppv)
     else if(IsEqualGUID(&IID_IDispatchJS, riid))
         *ppv = NULL;
     else if(IsEqualGUID(&IID_UndocumentedScriptIface, riid))
+        *ppv = NULL;
+    else if(IsEqualGUID(&IID_IMarshal, riid))
+        *ppv = NULL;
+    else if(IsEqualGUID(&IID_IManagedObject, riid))
         *ppv = NULL;
     else
         return FALSE;

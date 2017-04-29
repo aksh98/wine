@@ -73,6 +73,7 @@ typedef struct
     ISequentialStream *stream;
     IMalloc *imalloc;
     xml_encoding encoding;
+    WCHAR *encoding_name; /* exactly as specified on output creation */
     struct output_buffer buffer;
 } xmlwriteroutput;
 
@@ -373,6 +374,14 @@ static HRESULT write_encoding_bom(xmlwriter *writer)
     return S_OK;
 }
 
+static const WCHAR *get_output_encoding_name(xmlwriteroutput *output)
+{
+    if (output->encoding_name)
+        return output->encoding_name;
+
+    return get_encoding_name(output->encoding);
+}
+
 static HRESULT write_xmldecl(xmlwriter *writer, XmlStandalone standalone)
 {
     static const WCHAR versionW[] = {'<','?','x','m','l',' ','v','e','r','s','i','o','n','=','"','1','.','0','"'};
@@ -387,7 +396,7 @@ static HRESULT write_xmldecl(xmlwriter *writer, XmlStandalone standalone)
 
     /* encoding */
     write_output_buffer(writer->output, encodingW, ARRAY_SIZE(encodingW));
-    write_output_buffer_quoted(writer->output, get_encoding_name(writer->output->encoding), -1);
+    write_output_buffer_quoted(writer->output, get_output_encoding_name(writer->output), -1);
 
     /* standalone */
     if (standalone == XmlStandalone_Omit)
@@ -449,10 +458,16 @@ static HRESULT WINAPI xmlwriter_QueryInterface(IXmlWriter *iface, REFIID riid, v
 
     TRACE("(%p)->(%s %p)\n", This, debugstr_guid(riid), ppvObject);
 
-    if (IsEqualGUID(riid, &IID_IUnknown) ||
-        IsEqualGUID(riid, &IID_IXmlWriter))
+    if (IsEqualGUID(riid, &IID_IXmlWriter) ||
+        IsEqualGUID(riid, &IID_IUnknown))
     {
         *ppvObject = iface;
+    }
+    else
+    {
+        FIXME("interface %s is not supported\n", debugstr_guid(riid));
+        *ppvObject = NULL;
+        return E_NOINTERFACE;
     }
 
     IXmlWriter_AddRef(iface);
@@ -1366,6 +1381,7 @@ static ULONG WINAPI xmlwriteroutput_Release(IXmlWriterOutput *iface)
         if (This->output) IUnknown_Release(This->output);
         if (This->stream) ISequentialStream_Release(This->stream);
         free_output_buffer(This);
+        writeroutput_free(This, This->encoding_name);
         writeroutput_free(This, This);
         if (imalloc) IMalloc_Release(imalloc);
     }
@@ -1383,14 +1399,9 @@ static const struct IUnknownVtbl xmlwriteroutputvtbl =
 HRESULT WINAPI CreateXmlWriter(REFIID riid, void **obj, IMalloc *imalloc)
 {
     xmlwriter *writer;
+    HRESULT hr;
 
     TRACE("(%s, %p, %p)\n", wine_dbgstr_guid(riid), obj, imalloc);
-
-    if (!IsEqualGUID(riid, &IID_IXmlWriter))
-    {
-        ERR("Unexpected IID requested -> (%s)\n", wine_dbgstr_guid(riid));
-        return E_FAIL;
-    }
 
     if (imalloc)
         writer = IMalloc_Alloc(imalloc, sizeof(*writer));
@@ -1413,15 +1424,16 @@ HRESULT WINAPI CreateXmlWriter(REFIID riid, void **obj, IMalloc *imalloc)
     writer->starttagopen = FALSE;
     list_init(&writer->elements);
 
-    *obj = &writer->IXmlWriter_iface;
+    hr = IXmlWriter_QueryInterface(&writer->IXmlWriter_iface, riid, obj);
+    IXmlWriter_Release(&writer->IXmlWriter_iface);
 
-    TRACE("returning iface %p\n", *obj);
+    TRACE("returning iface %p, hr %#x\n", *obj, hr);
 
-    return S_OK;
+    return hr;
 }
 
-static HRESULT create_writer(IUnknown *stream, IMalloc *imalloc, xml_encoding encoding,
-                             IXmlWriterOutput **output)
+static HRESULT create_writer_output(IUnknown *stream, IMalloc *imalloc, xml_encoding encoding,
+    const WCHAR *encoding_name, IXmlWriterOutput **output)
 {
     xmlwriteroutput *writeroutput;
     HRESULT hr;
@@ -1432,12 +1444,14 @@ static HRESULT create_writer(IUnknown *stream, IMalloc *imalloc, xml_encoding en
         writeroutput = IMalloc_Alloc(imalloc, sizeof(*writeroutput));
     else
         writeroutput = heap_alloc(sizeof(*writeroutput));
-    if(!writeroutput) return E_OUTOFMEMORY;
+    if (!writeroutput)
+        return E_OUTOFMEMORY;
 
     writeroutput->IXmlWriterOutput_iface.lpVtbl = &xmlwriteroutputvtbl;
     writeroutput->ref = 1;
     writeroutput->imalloc = imalloc;
-    if (imalloc) IMalloc_AddRef(imalloc);
+    if (imalloc)
+        IMalloc_AddRef(imalloc);
     writeroutput->encoding = encoding;
     writeroutput->stream = NULL;
     hr = init_output_buffer(writeroutput);
@@ -1445,6 +1459,14 @@ static HRESULT create_writer(IUnknown *stream, IMalloc *imalloc, xml_encoding en
         IUnknown_Release(&writeroutput->IXmlWriterOutput_iface);
         return hr;
     }
+
+    if (encoding_name) {
+        unsigned int size = (strlenW(encoding_name) + 1) * sizeof(WCHAR);
+        writeroutput->encoding_name = writeroutput_alloc(writeroutput, size);
+        memcpy(writeroutput->encoding_name, encoding_name, size);
+    }
+    else
+        writeroutput->encoding_name = NULL;
 
     IUnknown_QueryInterface(stream, &IID_IUnknown, (void**)&writeroutput->output);
 
@@ -1468,7 +1490,7 @@ HRESULT WINAPI CreateXmlWriterOutputWithEncodingName(IUnknown *stream,
     if (!stream || !output) return E_INVALIDARG;
 
     xml_enc = parse_encoding_name(encoding ? encoding : utf8W, -1);
-    return create_writer(stream, imalloc, xml_enc, output);
+    return create_writer_output(stream, imalloc, xml_enc, encoding, output);
 }
 
 HRESULT WINAPI CreateXmlWriterOutputWithEncodingCodePage(IUnknown *stream,
@@ -1483,5 +1505,5 @@ HRESULT WINAPI CreateXmlWriterOutputWithEncodingCodePage(IUnknown *stream,
     if (!stream || !output) return E_INVALIDARG;
 
     xml_enc = get_encoding_from_codepage(codepage);
-    return create_writer(stream, imalloc, xml_enc, output);
+    return create_writer_output(stream, imalloc, xml_enc, NULL, output);
 }

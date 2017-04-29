@@ -47,13 +47,12 @@
 #define TAG_DXBC MAKE_TAG('D', 'X', 'B', 'C')
 #define TAG_ISGN MAKE_TAG('I', 'S', 'G', 'N')
 #define TAG_OSGN MAKE_TAG('O', 'S', 'G', 'N')
+#define TAG_OSG5 MAKE_TAG('O', 'S', 'G', '5')
 #define TAG_SHDR MAKE_TAG('S', 'H', 'D', 'R')
 #define TAG_SHEX MAKE_TAG('S', 'H', 'E', 'X')
 #define TAG_AON9 MAKE_TAG('A', 'o', 'n', '9')
 
 struct d3d_device;
-
-extern const struct wined3d_parent_ops d3d_null_wined3d_parent_ops DECLSPEC_HIDDEN;
 
 /* TRACE helper functions */
 const char *debug_d3d10_primitive_topology(D3D10_PRIMITIVE_TOPOLOGY topology) DECLSPEC_HIDDEN;
@@ -253,6 +252,7 @@ struct d3d_input_layout
 
     struct wined3d_private_store private_store;
     struct wined3d_vertex_declaration *wined3d_decl;
+    ID3D11Device *device;
 };
 
 HRESULT d3d_input_layout_create(struct d3d_device *device,
@@ -292,6 +292,7 @@ struct d3d11_hull_shader
 
 HRESULT d3d11_hull_shader_create(struct d3d_device *device, const void *byte_code, SIZE_T byte_code_length,
         struct d3d11_hull_shader **shader) DECLSPEC_HIDDEN;
+struct d3d11_hull_shader *unsafe_impl_from_ID3D11HullShader(ID3D11HullShader *iface) DECLSPEC_HIDDEN;
 
 /* ID3D11DomainShader */
 struct d3d11_domain_shader
@@ -306,6 +307,7 @@ struct d3d11_domain_shader
 
 HRESULT d3d11_domain_shader_create(struct d3d_device *device, const void *byte_code, SIZE_T byte_code_length,
         struct d3d11_domain_shader **shader) DECLSPEC_HIDDEN;
+struct d3d11_domain_shader *unsafe_impl_from_ID3D11DomainShader(ID3D11DomainShader *iface) DECLSPEC_HIDDEN;
 
 /* ID3D11GeometryShader, ID3D10GeometryShader */
 struct d3d_geometry_shader
@@ -358,9 +360,10 @@ HRESULT d3d11_compute_shader_create(struct d3d_device *device, const void *byte_
         struct d3d11_compute_shader **shader) DECLSPEC_HIDDEN;
 struct d3d11_compute_shader *unsafe_impl_from_ID3D11ComputeShader(ID3D11ComputeShader *iface) DECLSPEC_HIDDEN;
 
-HRESULT shader_parse_signature(const char *data, DWORD data_size, struct wined3d_shader_signature *s) DECLSPEC_HIDDEN;
+HRESULT shader_parse_signature(DWORD tag, const char *data, DWORD data_size,
+        struct wined3d_shader_signature *s) DECLSPEC_HIDDEN;
 struct wined3d_shader_signature_element *shader_find_signature_element(const struct wined3d_shader_signature *s,
-        const char *semantic_name, unsigned int semantic_idx) DECLSPEC_HIDDEN;
+        const char *semantic_name, unsigned int semantic_idx, unsigned int stream_idx) DECLSPEC_HIDDEN;
 void shader_free_signature(struct wined3d_shader_signature *s) DECLSPEC_HIDDEN;
 
 /* ID3D11ClassLinkage */
@@ -516,7 +519,6 @@ struct d3d_device
     float blend_factor[4];
     struct d3d_depthstencil_state *depth_stencil_state;
     UINT stencil_ref;
-    struct d3d_rasterizer_state *rasterizer_state;
 };
 
 static inline struct d3d_device *impl_from_ID3D11Device(ID3D11Device *iface)

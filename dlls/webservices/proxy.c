@@ -16,7 +16,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <stdio.h>
 #include <stdarg.h>
 
 #include "windef.h"
@@ -43,11 +42,12 @@ static const struct prop_desc proxy_props[] =
 
 struct proxy
 {
-    ULONG             magic;
-    CRITICAL_SECTION  cs;
-    WS_CHANNEL       *channel;
-    ULONG             prop_count;
-    struct prop       prop[sizeof(proxy_props)/sizeof(proxy_props[0])];
+    ULONG                   magic;
+    CRITICAL_SECTION        cs;
+    WS_SERVICE_PROXY_STATE  state;
+    WS_CHANNEL             *channel;
+    ULONG                   prop_count;
+    struct prop             prop[sizeof(proxy_props)/sizeof(proxy_props[0])];
 };
 
 #define PROXY_MAGIC (('P' << 24) | ('R' << 16) | ('O' << 8) | 'X')
@@ -69,9 +69,17 @@ static struct proxy *alloc_proxy(void)
     return ret;
 }
 
+static void reset_proxy( struct proxy *proxy )
+{
+    WsResetChannel( proxy->channel, NULL );
+    proxy->state = WS_SERVICE_PROXY_STATE_CREATED;
+}
+
 static void free_proxy( struct proxy *proxy )
 {
+    reset_proxy( proxy );
     WsFreeChannel( proxy->channel );
+
     proxy->cs.DebugInfo->Spare[0] = 0;
     DeleteCriticalSection( &proxy->cs );
     heap_free( proxy );
@@ -191,6 +199,38 @@ HRESULT WINAPI WsCreateServiceProxyFromTemplate( WS_CHANNEL_TYPE channel_type,
 }
 
 /**************************************************************************
+ *          WsResetServiceProxy		[webservices.@]
+ */
+HRESULT WINAPI WsResetServiceProxy( WS_SERVICE_PROXY *handle, WS_ERROR *error )
+{
+    struct proxy *proxy = (struct proxy *)handle;
+
+    TRACE( "%p %p\n", handle, error );
+    if (error) FIXME( "ignoring error parameter\n" );
+
+    if (!proxy) return E_INVALIDARG;
+
+    EnterCriticalSection( &proxy->cs );
+
+    if (proxy->magic != PROXY_MAGIC)
+    {
+        LeaveCriticalSection( &proxy->cs );
+        return E_INVALIDARG;
+    }
+
+    if (proxy->state != WS_SERVICE_PROXY_STATE_CREATED && proxy->state != WS_SERVICE_PROXY_STATE_CLOSED)
+    {
+        LeaveCriticalSection( &proxy->cs );
+        return WS_E_INVALID_OPERATION;
+    }
+
+    reset_proxy( proxy );
+
+    LeaveCriticalSection( &proxy->cs );
+    return S_OK;
+}
+
+/**************************************************************************
  *          WsFreeServiceProxy		[webservices.@]
  */
 void WINAPI WsFreeServiceProxy( WS_SERVICE_PROXY *handle )
@@ -222,7 +262,7 @@ HRESULT WINAPI WsGetServiceProxyProperty( WS_SERVICE_PROXY *handle, WS_PROXY_PRO
                                           void *buf, ULONG size, WS_ERROR *error )
 {
     struct proxy *proxy = (struct proxy *)handle;
-    HRESULT hr;
+    HRESULT hr = S_OK;
 
     TRACE( "%p %u %p %u %p\n", handle, id, buf, size, error );
     if (error) FIXME( "ignoring error parameter\n" );
@@ -237,7 +277,16 @@ HRESULT WINAPI WsGetServiceProxyProperty( WS_SERVICE_PROXY *handle, WS_PROXY_PRO
         return E_INVALIDARG;
     }
 
-    hr = prop_get( proxy->prop, proxy->prop_count, id, buf, size );
+    switch (id)
+    {
+    case WS_PROXY_PROPERTY_STATE:
+        if (!buf || size != sizeof(proxy->state)) hr = E_INVALIDARG;
+        else *(WS_SERVICE_PROXY_STATE *)buf = proxy->state;
+        break;
+
+    default:
+        hr = prop_get( proxy->prop, proxy->prop_count, id, buf, size );
+    }
 
     LeaveCriticalSection( &proxy->cs );
     return hr;
@@ -266,7 +315,8 @@ HRESULT WINAPI WsOpenServiceProxy( WS_SERVICE_PROXY *handle, const WS_ENDPOINT_A
         return E_INVALIDARG;
     }
 
-    hr = WsOpenChannel( proxy->channel, endpoint, NULL, NULL );
+    if ((hr = WsOpenChannel( proxy->channel, endpoint, NULL, NULL )) == S_OK)
+        proxy->state = WS_SERVICE_PROXY_STATE_OPEN;
 
     LeaveCriticalSection( &proxy->cs );
     return hr;
@@ -294,7 +344,8 @@ HRESULT WINAPI WsCloseServiceProxy( WS_SERVICE_PROXY *handle, const WS_ASYNC_CON
         return E_INVALIDARG;
     }
 
-    hr = WsCloseChannel( proxy->channel, NULL, NULL );
+    if ((hr = WsCloseChannel( proxy->channel, NULL, NULL )) == S_OK)
+        proxy->state = WS_SERVICE_PROXY_STATE_CLOSED;
 
     LeaveCriticalSection( &proxy->cs );
     return hr;
@@ -381,20 +432,12 @@ static HRESULT receive_message( WS_CHANNEL *channel, WS_MESSAGE *msg, WS_MESSAGE
                                 WS_PARAMETER_DESCRIPTION *params, ULONG count, WS_HEAP *heap, const void **args )
 {
     WS_XML_READER *reader;
-    char *buf;
-    ULONG len;
     HRESULT hr;
 
     if ((hr = message_set_action( msg, desc->action )) != S_OK) return hr;
-    if ((hr = channel_receive_message( channel, &buf, &len )) != S_OK) return hr;
-    if ((hr = WsCreateReader( NULL, 0, &reader, NULL )) != S_OK) goto done;
-    if ((hr = set_input( reader, buf, len )) != S_OK) goto done;
-    hr = read_message( msg, reader, heap, desc->bodyElementDescription, params, count, args );
-
-done:
-    WsFreeReader( reader );
-    heap_free( buf);
-    return hr;
+    if ((hr = channel_receive_message( channel )) != S_OK) return hr;
+    if ((hr = channel_get_reader( channel, &reader )) != S_OK) return hr;
+    return read_message( msg, reader, heap, desc->bodyElementDescription, params, count, args );
 }
 
 static HRESULT create_input_message( WS_CHANNEL *channel, const WS_CALL_PROPERTY *properties,

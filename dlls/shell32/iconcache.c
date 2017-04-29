@@ -298,6 +298,17 @@ static INT SIC_IconAppend (LPCWSTR sSourceFile, INT dwSourceIndex, HICON hSmallI
 	LeaveCriticalSection(&SHELL32_SicCS);
 	return ret;
 }
+
+static BOOL get_imagelist_icon_size(int list, SIZE *size)
+{
+    HIMAGELIST image_list;
+
+    if (list < SHIL_LARGE || list > SHIL_SMALL) return FALSE;
+    image_list = (list == SHIL_LARGE) ? ShellBigIconList : ShellSmallIconList;
+
+    return ImageList_GetIconSize( image_list, &size->cx, &size->cy );
+}
+
 /****************************************************************************
  * SIC_LoadIcon				[internal]
  *
@@ -305,15 +316,18 @@ static INT SIC_IconAppend (LPCWSTR sSourceFile, INT dwSourceIndex, HICON hSmallI
  *  gets small/big icon by number from a file
  */
 static INT SIC_LoadIcon (LPCWSTR sSourceFile, INT dwSourceIndex, DWORD dwFlags)
-{	HICON	hiconLarge=0;
+{
+	HICON	hiconLarge=0;
 	HICON	hiconSmall=0;
 	HICON 	hiconLargeShortcut;
 	HICON	hiconSmallShortcut;
+        int ret;
+        SIZE size;
 
-        PrivateExtractIconsW( sSourceFile, dwSourceIndex, GetSystemMetrics(SM_CXICON),
-                              GetSystemMetrics(SM_CYICON), &hiconLarge, 0, 1, 0 );
-        PrivateExtractIconsW( sSourceFile, dwSourceIndex, GetSystemMetrics(SM_CXSMICON),
-                              GetSystemMetrics(SM_CYSMICON), &hiconSmall, 0, 1, 0 );
+        get_imagelist_icon_size( SHIL_LARGE, &size );
+        PrivateExtractIconsW( sSourceFile, dwSourceIndex, size.cx, size.cy, &hiconLarge, 0, 1, 0 );
+        get_imagelist_icon_size( SHIL_SMALL, &size );
+        PrivateExtractIconsW( sSourceFile, dwSourceIndex, size.cx, size.cy, &hiconSmall, 0, 1, 0 );
 
 	if ( !hiconLarge ||  !hiconSmall)
 	{
@@ -327,6 +341,8 @@ static INT SIC_LoadIcon (LPCWSTR sSourceFile, INT dwSourceIndex, DWORD dwFlags)
 	  hiconSmallShortcut = SIC_OverlayShortcutImage(hiconSmall, FALSE);
 	  if (NULL != hiconLargeShortcut && NULL != hiconSmallShortcut)
 	  {
+            DestroyIcon( hiconLarge );
+            DestroyIcon( hiconSmall );
 	    hiconLarge = hiconLargeShortcut;
 	    hiconSmall = hiconSmallShortcut;
 	  }
@@ -339,8 +355,12 @@ static INT SIC_LoadIcon (LPCWSTR sSourceFile, INT dwSourceIndex, DWORD dwFlags)
 	  }
 	}
 
-	return SIC_IconAppend (sSourceFile, dwSourceIndex, hiconSmall, hiconLarge, dwFlags);
+        ret = SIC_IconAppend( sSourceFile, dwSourceIndex, hiconSmall, hiconLarge, dwFlags );
+        DestroyIcon( hiconLarge );
+        DestroyIcon( hiconSmall );
+        return ret;
 }
+
 /*****************************************************************************
  * SIC_Initialize			[internal]
  */

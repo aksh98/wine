@@ -1752,6 +1752,7 @@ WINBASEAPI BOOL        WINAPI CloseHandle(HANDLE);
 WINBASEAPI VOID        WINAPI CloseThreadpool(PTP_POOL);
 WINBASEAPI VOID        WINAPI CloseThreadpoolCleanupGroup(PTP_CLEANUP_GROUP);
 WINBASEAPI VOID        WINAPI CloseThreadpoolCleanupGroupMembers(PTP_CLEANUP_GROUP,BOOL,PVOID);
+WINBASEAPI VOID        WINAPI CloseThreadpoolTimer(PTP_TIMER);
 WINBASEAPI VOID        WINAPI CloseThreadpoolWait(PTP_WAIT);
 WINBASEAPI VOID        WINAPI CloseThreadpoolWork(PTP_WORK);
 WINBASEAPI BOOL        WINAPI CommConfigDialogA(LPCSTR,HWND,LPCOMMCONFIG);
@@ -1984,6 +1985,7 @@ WINBASEAPI PVOID       WINAPI FlsGetValue(DWORD);
 WINBASEAPI BOOL        WINAPI FlsSetValue(DWORD,PVOID);
 WINBASEAPI BOOL        WINAPI FlushFileBuffers(HANDLE);
 WINBASEAPI BOOL        WINAPI FlushInstructionCache(HANDLE,LPCVOID,SIZE_T);
+WINBASEAPI VOID        WINAPI FlushProcessWriteBuffers(void);
 WINBASEAPI BOOL        WINAPI FlushViewOfFile(LPCVOID,SIZE_T);
 WINBASEAPI DWORD       WINAPI FormatMessageA(DWORD,LPCVOID,DWORD,DWORD,LPSTR,DWORD,__ms_va_list*);
 WINBASEAPI DWORD       WINAPI FormatMessageW(DWORD,LPCVOID,DWORD,DWORD,LPWSTR,DWORD,__ms_va_list*);
@@ -1993,6 +1995,7 @@ WINBASEAPI BOOL        WINAPI FreeEnvironmentStringsW(LPWSTR);
 #define                       FreeEnvironmentStrings WINELIB_NAME_AW(FreeEnvironmentStrings)
 WINBASEAPI BOOL        WINAPI FreeLibrary(HMODULE);
 WINBASEAPI VOID DECLSPEC_NORETURN WINAPI FreeLibraryAndExitThread(HINSTANCE,DWORD);
+WINBASEAPI VOID        WINAPI FreeLibraryWhenCallbackReturns(PTP_CALLBACK_INSTANCE,HMODULE);
 #define                       FreeModule(handle) FreeLibrary(handle)
 #define                       FreeProcInstance(proc) /*nothing*/
 WINBASEAPI BOOL        WINAPI FreeResource(HGLOBAL);
@@ -2635,6 +2638,7 @@ WINBASEAPI DWORD       WINAPI WaitForMultipleObjects(DWORD,const HANDLE*,BOOL,DW
 WINBASEAPI DWORD       WINAPI WaitForMultipleObjectsEx(DWORD,const HANDLE*,BOOL,DWORD,BOOL);
 WINBASEAPI DWORD       WINAPI WaitForSingleObject(HANDLE,DWORD);
 WINBASEAPI DWORD       WINAPI WaitForSingleObjectEx(HANDLE,DWORD,BOOL);
+WINBASEAPI VOID        WINAPI WaitForThreadpoolTimerCallbacks(PTP_TIMER,BOOL);
 WINBASEAPI BOOL        WINAPI WaitNamedPipeA(LPCSTR,DWORD);
 WINBASEAPI BOOL        WINAPI WaitNamedPipeW(LPCWSTR,DWORD);
 #define                       WaitNamedPipe WINELIB_NAME_AW(WaitNamedPipe)

@@ -52,17 +52,28 @@ static HRESULT shdr_handler(const char *data, DWORD data_size, DWORD tag, void *
                 TRACE("Skipping shader input signature on feature level %#x.\n", ctx->feature_level);
                 break;
             }
-            if (FAILED(hr = shader_parse_signature(data, data_size, &desc->input_signature)))
+            if (desc->input_signature.elements)
+            {
+                FIXME("Multiple input signatures.\n");
+                break;
+            }
+            if (FAILED(hr = shader_parse_signature(tag, data, data_size, &desc->input_signature)))
                 return hr;
             break;
 
         case TAG_OSGN:
+        case TAG_OSG5:
             if (ctx->feature_level <= D3D_FEATURE_LEVEL_9_3)
             {
                 TRACE("Skipping shader output signature on feature level %#x.\n", ctx->feature_level);
                 break;
             }
-            if (FAILED(hr = shader_parse_signature(data, data_size, &desc->output_signature)))
+            if (desc->output_signature.elements)
+            {
+                FIXME("Multiple output signatures.\n");
+                break;
+            }
+            if (FAILED(hr = shader_parse_signature(tag, data, data_size, &desc->output_signature)))
                 return hr;
             break;
 
@@ -167,7 +178,8 @@ static const char *shader_get_string(const char *data, size_t data_size, DWORD o
     return data + offset;
 }
 
-HRESULT shader_parse_signature(const char *data, DWORD data_size, struct wined3d_shader_signature *s)
+HRESULT shader_parse_signature(DWORD tag, const char *data, DWORD data_size,
+        struct wined3d_shader_signature *s)
 {
     struct wined3d_shader_signature_element *e;
     const char *ptr = data;
@@ -181,7 +193,7 @@ HRESULT shader_parse_signature(const char *data, DWORD data_size, struct wined3d
     }
 
     read_dword(&ptr, &count);
-    TRACE("%u elements\n", count);
+    TRACE("%u elements.\n", count);
 
     skip_dword_unknown(&ptr, 1); /* It seems to always be 0x00000008. */
 
@@ -199,8 +211,12 @@ HRESULT shader_parse_signature(const char *data, DWORD data_size, struct wined3d
 
     for (i = 0; i < count; ++i)
     {
-        UINT name_offset;
+        DWORD name_offset;
 
+        if (tag == TAG_OSG5)
+            read_dword(&ptr, &e[i].stream_idx);
+        else
+            e[i].stream_idx = 0;
         read_dword(&ptr, &name_offset);
         if (!(e[i].semantic_name = shader_get_string(data, data_size, name_offset)))
         {
@@ -214,9 +230,9 @@ HRESULT shader_parse_signature(const char *data, DWORD data_size, struct wined3d
         read_dword(&ptr, &e[i].register_idx);
         read_dword(&ptr, &e[i].mask);
 
-        TRACE("semantic: %s, semantic idx: %u, sysval_semantic %#x, "
-                "type %u, register idx: %u, use_mask %#x, input_mask %#x\n",
-                debugstr_a(e[i].semantic_name), e[i].semantic_idx, e[i].sysval_semantic,
+        TRACE("Stream: %u, semantic: %s, semantic idx: %u, sysval_semantic %#x, "
+                "type %u, register idx: %u, use_mask %#x, input_mask %#x.\n",
+                e[i].stream_idx, debugstr_a(e[i].semantic_name), e[i].semantic_idx, e[i].sysval_semantic,
                 e[i].component_type, e[i].register_idx, (e[i].mask >> 8) & 0xff, e[i].mask & 0xff);
     }
 
@@ -227,14 +243,15 @@ HRESULT shader_parse_signature(const char *data, DWORD data_size, struct wined3d
 }
 
 struct wined3d_shader_signature_element *shader_find_signature_element(const struct wined3d_shader_signature *s,
-        const char *semantic_name, unsigned int semantic_idx)
+        const char *semantic_name, unsigned int semantic_idx, unsigned int stream_idx)
 {
     struct wined3d_shader_signature_element *e = s->elements;
     unsigned int i;
 
     for (i = 0; i < s->element_count; ++i)
     {
-        if (!strcasecmp(e[i].semantic_name, semantic_name) && e[i].semantic_idx == semantic_idx)
+        if (!strcasecmp(e[i].semantic_name, semantic_name) && e[i].semantic_idx == semantic_idx
+                && e[i].stream_idx == stream_idx)
             return &e[i];
     }
 
@@ -618,6 +635,14 @@ static ULONG STDMETHODCALLTYPE d3d11_hull_shader_AddRef(ID3D11HullShader *iface)
 
     TRACE("%p increasing refcount to %u.\n", shader, refcount);
 
+    if (refcount == 1)
+    {
+        ID3D11Device_AddRef(shader->device);
+        wined3d_mutex_lock();
+        wined3d_shader_incref(shader->wined3d_shader);
+        wined3d_mutex_unlock();
+    }
+
     return refcount;
 }
 
@@ -771,6 +796,15 @@ HRESULT d3d11_hull_shader_create(struct d3d_device *device, const void *byte_cod
     return S_OK;
 }
 
+struct d3d11_hull_shader *unsafe_impl_from_ID3D11HullShader(ID3D11HullShader *iface)
+{
+    if (!iface)
+        return NULL;
+    assert(iface->lpVtbl == &d3d11_hull_shader_vtbl);
+
+    return impl_from_ID3D11HullShader(iface);
+}
+
 /* ID3D11DomainShader methods */
 
 static inline struct d3d11_domain_shader *impl_from_ID3D11DomainShader(ID3D11DomainShader *iface)
@@ -804,6 +838,14 @@ static ULONG STDMETHODCALLTYPE d3d11_domain_shader_AddRef(ID3D11DomainShader *if
     ULONG refcount = InterlockedIncrement(&shader->refcount);
 
     TRACE("%p increasing refcount to %u.\n", shader, refcount);
+
+    if (refcount == 1)
+    {
+        ID3D11Device_AddRef(shader->device);
+        wined3d_mutex_lock();
+        wined3d_shader_incref(shader->wined3d_shader);
+        wined3d_mutex_unlock();
+    }
 
     return refcount;
 }
@@ -958,6 +1000,15 @@ HRESULT d3d11_domain_shader_create(struct d3d_device *device, const void *byte_c
     return S_OK;
 }
 
+struct d3d11_domain_shader *unsafe_impl_from_ID3D11DomainShader(ID3D11DomainShader *iface)
+{
+    if (!iface)
+        return NULL;
+    assert(iface->lpVtbl == &d3d11_domain_shader_vtbl);
+
+    return impl_from_ID3D11DomainShader(iface);
+}
+
 /* ID3D11GeometryShader methods */
 
 static inline struct d3d_geometry_shader *impl_from_ID3D11GeometryShader(ID3D11GeometryShader *iface)
@@ -1001,6 +1052,14 @@ static ULONG STDMETHODCALLTYPE d3d11_geometry_shader_AddRef(ID3D11GeometryShader
     ULONG refcount = InterlockedIncrement(&shader->refcount);
 
     TRACE("%p increasing refcount to %u.\n", shader, refcount);
+
+    if (refcount == 1)
+    {
+        ID3D11Device_AddRef(shader->device);
+        wined3d_mutex_lock();
+        wined3d_shader_incref(shader->wined3d_shader);
+        wined3d_mutex_unlock();
+    }
 
     return refcount;
 }
@@ -1191,7 +1250,7 @@ static const struct wined3d_parent_ops d3d_geometry_shader_wined3d_parent_ops =
 static HRESULT wined3d_so_elements_from_d3d11_so_entries(struct wined3d_stream_output_element *elements,
         const D3D11_SO_DECLARATION_ENTRY *entries, unsigned int entry_count,
         const unsigned int *buffer_strides, unsigned int buffer_stride_count,
-        const struct wined3d_shader_signature *os)
+        const struct wined3d_shader_signature *os, D3D_FEATURE_LEVEL feature_level)
 {
     unsigned int i, j, mask;
 
@@ -1209,6 +1268,11 @@ static HRESULT wined3d_so_elements_from_d3d11_so_entries(struct wined3d_stream_o
         if (f->Stream >= D3D11_SO_STREAM_COUNT)
         {
             WARN("Invalid stream %u.\n", f->Stream);
+            return E_INVALIDARG;
+        }
+        if (f->Stream && feature_level < D3D_FEATURE_LEVEL_11_0)
+        {
+            WARN("Invalid stream %u for feature level %#x.\n", f->Stream, feature_level);
             return E_INVALIDARG;
         }
         if (f->Stream)
@@ -1242,7 +1306,7 @@ static HRESULT wined3d_so_elements_from_d3d11_so_entries(struct wined3d_stream_o
 
             e->register_idx = WINED3D_STREAM_OUTPUT_GAP;
         }
-        else if ((output = shader_find_signature_element(os, f->SemanticName, f->SemanticIndex)))
+        else if ((output = shader_find_signature_element(os, f->SemanticName, f->SemanticIndex, f->Stream)))
         {
             if (e->component_idx > 3 || e->component_count > 4 || !e->component_count
                     || e->component_idx + e->component_count > 4)
@@ -1299,8 +1363,8 @@ static HRESULT wined3d_so_elements_from_d3d11_so_entries(struct wined3d_stream_o
     for (i = 0; i < D3D11_SO_STREAM_COUNT; ++i)
     {
         unsigned int current_stride[D3D11_SO_BUFFER_SLOT_COUNT] = {0};
-        BOOL has_element[D3D11_SO_BUFFER_SLOT_COUNT] = {FALSE};
-        BOOL is_used[D3D11_SO_BUFFER_SLOT_COUNT] = {FALSE};
+        unsigned int element_count[D3D11_SO_BUFFER_SLOT_COUNT] = {0};
+        unsigned int gap_count[D3D11_SO_BUFFER_SLOT_COUNT] = {0};
 
         for (j = 0; j < entry_count; ++j)
         {
@@ -1309,19 +1373,21 @@ static HRESULT wined3d_so_elements_from_d3d11_so_entries(struct wined3d_stream_o
             if (e->stream_idx != i)
                 continue;
             current_stride[e->output_slot] += 4 * e->component_count;
-            is_used[e->output_slot] = TRUE;
-            if (e->register_idx != WINED3D_STREAM_OUTPUT_GAP)
-                has_element[e->output_slot] = TRUE;
+            ++element_count[e->output_slot];
+            if (e->register_idx == WINED3D_STREAM_OUTPUT_GAP)
+                ++gap_count[e->output_slot];
         }
 
         for (j = 0; j < D3D11_SO_BUFFER_SLOT_COUNT; ++j)
         {
-            if (is_used[j] && !has_element[j])
+            if (!element_count[j])
+                continue;
+            if (element_count[j] == gap_count[j])
             {
                 WARN("Stream %u, output slot %u contains only gaps.\n", i, j);
                 return E_INVALIDARG;
             }
-            if (buffer_stride_count && is_used[j])
+            if (buffer_stride_count)
             {
                 if (buffer_stride_count <= j)
                 {
@@ -1331,6 +1397,18 @@ static HRESULT wined3d_so_elements_from_d3d11_so_entries(struct wined3d_stream_o
                 if (buffer_strides[j] < current_stride[j] || buffer_strides[j] % 4)
                 {
                     WARN("Invalid stride %u for buffer slot %u.\n", buffer_strides[j], j);
+                    return E_INVALIDARG;
+                }
+            }
+        }
+
+        if (!i && feature_level < D3D_FEATURE_LEVEL_11_0 && element_count[0] != entry_count)
+        {
+            for (j = 0; j < ARRAY_SIZE(element_count); ++j)
+            {
+                if (element_count[j] > 1)
+                {
+                    WARN("Only one element per output slot is allowed.\n");
                     return E_INVALIDARG;
                 }
             }
@@ -1367,6 +1445,21 @@ static HRESULT d3d_geometry_shader_init(struct d3d_geometry_shader *shader,
         WARN("Invalid rasterizer stream %u.\n", rasterizer_stream);
         return E_INVALIDARG;
     }
+    if (device->feature_level < D3D_FEATURE_LEVEL_11_0)
+    {
+        if (rasterizer_stream)
+        {
+            WARN("Invalid rasterizer stream %u for feature level %#x.\n",
+                    rasterizer_stream, device->feature_level);
+            return E_INVALIDARG;
+        }
+        if (buffer_stride_count && buffer_stride_count != 1)
+        {
+            WARN("Invalid buffer stride count %u for feature level %#x.\n",
+                    buffer_stride_count, device->feature_level);
+            return E_INVALIDARG;
+        }
+    }
 
     if (FAILED(hr = shader_extract_from_dxbc(byte_code, byte_code_length, &desc, device->feature_level)))
     {
@@ -1392,7 +1485,8 @@ static HRESULT d3d_geometry_shader_init(struct d3d_geometry_shader *shader,
             return E_OUTOFMEMORY;
         }
         if (FAILED(hr = wined3d_so_elements_from_d3d11_so_entries(so_desc.elements,
-                so_entries, so_entry_count, buffer_strides, buffer_stride_count, &desc.output_signature)))
+                so_entries, so_entry_count, buffer_strides, buffer_stride_count,
+                &desc.output_signature, device->feature_level)))
         {
             HeapFree(GetProcessHeap(), 0, so_desc.elements);
             shader_free_signature(&desc.input_signature);
@@ -1819,6 +1913,14 @@ static ULONG STDMETHODCALLTYPE d3d11_compute_shader_AddRef(ID3D11ComputeShader *
     ULONG refcount = InterlockedIncrement(&shader->refcount);
 
     TRACE("%p increasing refcount to %u.\n", shader, refcount);
+
+    if (refcount == 1)
+    {
+        ID3D11Device_AddRef(shader->device);
+        wined3d_mutex_lock();
+        wined3d_shader_incref(shader->wined3d_shader);
+        wined3d_mutex_unlock();
+    }
 
     return refcount;
 }

@@ -43,8 +43,6 @@ int Image_Open;
 int Image_Closed;
 int Image_Root;
 
-#define CX_ICON    16
-#define CY_ICON    16
 #define NUM_ICONS    3
 
 static BOOL UpdateExpandingTree(HWND hwndTV, HTREEITEM hItem, int state);
@@ -132,13 +130,16 @@ static LPWSTR get_path_component(LPCWSTR *lplpKeyName) {
 HTREEITEM FindPathInTree(HWND hwndTV, LPCWSTR lpKeyName) {
     TVITEMEXW tvi;
     WCHAR buf[261]; /* tree view has 260 character limitation on item name */
-    HTREEITEM hItem, hOldItem;
+    HTREEITEM hRoot, hItem, hOldItem;
+    BOOL valid_path;
 
     buf[260] = '\0';
-    hItem = (HTREEITEM)SendMessageW(hwndTV, TVM_GETNEXTITEM, TVGN_ROOT, 0);
+    hRoot = (HTREEITEM)SendMessageW(hwndTV, TVM_GETNEXTITEM, TVGN_ROOT, 0);
+    hItem = hRoot;
     SendMessageW(hwndTV, TVM_EXPAND, TVE_EXPAND, (LPARAM)hItem );
     hItem = (HTREEITEM)SendMessageW(hwndTV, TVM_GETNEXTITEM, TVGN_CHILD, (LPARAM)hItem);
     hOldItem = hItem;
+    valid_path = FALSE;
     while(1) {
         LPWSTR lpItemName = get_path_component(&lpKeyName);
 
@@ -150,6 +151,7 @@ HTREEITEM FindPathInTree(HWND hwndTV, LPCWSTR lpKeyName) {
                 tvi.cchTextMax = 260;
                 SendMessageW(hwndTV, TVM_GETITEMW, 0, (LPARAM) &tvi);
                 if (!lstrcmpiW(tvi.pszText, lpItemName)) {
+                     valid_path = TRUE;
                      SendMessageW(hwndTV, TVM_EXPAND, TVE_EXPAND, (LPARAM)hItem );
                      if (!lpKeyName)
                      {
@@ -164,10 +166,10 @@ HTREEITEM FindPathInTree(HWND hwndTV, LPCWSTR lpKeyName) {
             }
             HeapFree(GetProcessHeap(), 0, lpItemName);
             if (!hItem)
-                return hOldItem;
+                return valid_path ? hOldItem : hRoot;
         }
         else
-            return hItem;
+            return valid_path ? hItem : hRoot;
     }
 }
 
@@ -595,10 +597,11 @@ static BOOL InitTreeViewImageLists(HWND hwndTV)
 {
     HIMAGELIST himl;  /* handle to image list  */
     HICON hico;       /* handle to icon  */
+    INT cx = GetSystemMetrics(SM_CXSMICON);
+    INT cy = GetSystemMetrics(SM_CYSMICON);
 
     /* Create the image list.  */
-    if ((himl = ImageList_Create(CX_ICON, CY_ICON,
-                                 ILC_MASK, 0, NUM_ICONS)) == NULL)
+    if ((himl = ImageList_Create(cx, cy, ILC_MASK, 0, NUM_ICONS)) == NULL)
         return FALSE;
 
     /* Add the open file, closed file, and document bitmaps.  */

@@ -155,7 +155,7 @@ static const struct
 }
 table_info[] =
 {
-    {sizeof(double), 1, PRES_VT_DOUBLE}, /* PRES_REGTAB_IMMED */
+    {sizeof(double), 4, PRES_VT_DOUBLE}, /* PRES_REGTAB_IMMED */
     {sizeof(float),  4, PRES_VT_FLOAT }, /* PRES_REGTAB_CONST */
     {sizeof(float),  4, PRES_VT_FLOAT }, /* PRES_REGTAB_OCONST */
     {sizeof(BOOL),   1, PRES_VT_BOOL  }, /* PRES_REGTAB_OBCONST */
@@ -185,12 +185,18 @@ static const enum pres_reg_tables shad_regset2table[] =
     PRES_REGTAB_COUNT,     /* D3DXRS_SAMPLER */
 };
 
-struct d3dx_pres_operand
+struct d3dx_pres_reg
 {
     enum pres_reg_tables table;
     /* offset is component index, not register index, e. g.
        offset for component c3.y is 13 (3 * 4 + 1) */
     unsigned int offset;
+};
+
+struct d3dx_pres_operand
+{
+    struct d3dx_pres_reg reg;
+    struct d3dx_pres_reg index_reg;
 };
 
 #define MAX_INPUTS_COUNT 8
@@ -368,7 +374,7 @@ static unsigned int *find_bytecode_comment(unsigned int *ptr, unsigned int count
     return NULL;
 }
 
-static unsigned int *parse_pres_arg(unsigned int *ptr, unsigned int count, struct d3dx_pres_operand *opr)
+static unsigned int *parse_pres_reg(unsigned int *ptr, struct d3dx_pres_reg *reg)
 {
     static const enum pres_reg_tables reg_table[8] =
     {
@@ -376,29 +382,46 @@ static unsigned int *parse_pres_arg(unsigned int *ptr, unsigned int count, struc
         PRES_REGTAB_OCONST, PRES_REGTAB_OBCONST, PRES_REGTAB_OICONST, PRES_REGTAB_TEMP
     };
 
-    if (count < 3)
-    {
-        WARN("Byte code buffer ends unexpectedly.\n");
-        return NULL;
-    }
-
-    if (*ptr)
-    {
-        FIXME("Relative addressing not supported yet, word %#x.\n", *ptr);
-        return NULL;
-    }
-    ++ptr;
-
     if (*ptr >= ARRAY_SIZE(reg_table) || reg_table[*ptr] == PRES_REGTAB_COUNT)
     {
         FIXME("Unsupported register table %#x.\n", *ptr);
         return NULL;
     }
-    opr->table = reg_table[*ptr++];
-    opr->offset = *ptr++;
 
-    if (opr->table == PRES_REGTAB_OBCONST)
-        opr->offset /= 4;
+    reg->table = reg_table[*ptr++];
+    reg->offset = *ptr++;
+    return ptr;
+}
+
+static unsigned int *parse_pres_arg(unsigned int *ptr, unsigned int count, struct d3dx_pres_operand *opr)
+{
+    if (count < 3 || (*ptr && count < 5))
+    {
+        WARN("Byte code buffer ends unexpectedly, count %u.\n", count);
+        return NULL;
+    }
+
+    if (*ptr)
+    {
+        if (*ptr != 1)
+        {
+            FIXME("Unknown relative addressing flag, word %#x.\n", *ptr);
+            return NULL;
+        }
+        ptr = parse_pres_reg(ptr + 1, &opr->index_reg);
+        if (!ptr)
+            return NULL;
+    }
+    else
+    {
+        opr->index_reg.table = PRES_REGTAB_COUNT;
+        ++ptr;
+    }
+
+    ptr = parse_pres_reg(ptr, &opr->reg);
+
+    if (opr->reg.table == PRES_REGTAB_OBCONST)
+        opr->reg.offset /= 4;
     return ptr;
 }
 
@@ -452,6 +475,12 @@ static unsigned int *parse_pres_ins(unsigned int *ptr, unsigned int count, struc
         ptr = p;
     }
     ptr = parse_pres_arg(ptr, count, &ins->output);
+    if (ins->output.index_reg.table != PRES_REGTAB_COUNT)
+    {
+        FIXME("Relative addressing in output register not supported.\n");
+        return NULL;
+    }
+
     return ptr;
 }
 
@@ -566,20 +595,33 @@ static void dump_arg(struct d3dx_regstore *rs, const struct d3dx_pres_operand *a
     static const char *xyzw_str = "xyzw";
     unsigned int i, table;
 
-    table = arg->table;
-    if (table == PRES_REGTAB_IMMED)
+    table = arg->reg.table;
+    if (table == PRES_REGTAB_IMMED && arg->index_reg.table == PRES_REGTAB_COUNT)
     {
         TRACE("(");
         for (i = 0; i < component_count; ++i)
             TRACE(i < component_count - 1 ? "%.16e, " : "%.16e",
-                    ((double *)rs->tables[PRES_REGTAB_IMMED])[arg->offset + i]);
+                    ((double *)rs->tables[PRES_REGTAB_IMMED])[arg->reg.offset + i]);
         TRACE(")");
     }
     else
     {
-        TRACE("%s%u.", table_symbol[table], get_reg_offset(table, arg->offset));
+        if (arg->index_reg.table == PRES_REGTAB_COUNT)
+        {
+            TRACE("%s%u.", table_symbol[table], get_reg_offset(table, arg->reg.offset));
+        }
+        else
+        {
+            unsigned int index_reg;
+
+            index_reg = get_reg_offset(arg->index_reg.table, arg->index_reg.offset);
+            TRACE("%s[%u + %s%u.%c].", table_symbol[table], get_reg_offset(table, arg->reg.offset),
+                    table_symbol[arg->index_reg.table], index_reg,
+                    xyzw_str[arg->index_reg.offset
+                    - index_reg * table_info[arg->index_reg.table].reg_component_count]);
+        }
         for (i = 0; i < component_count; ++i)
-            TRACE("%c", xyzw_str[(arg->offset + i) % 4]);
+            TRACE("%c", xyzw_str[(arg->reg.offset + i) % 4]);
     }
 }
 
@@ -599,7 +641,7 @@ static void dump_ins(struct d3dx_regstore *rs, const struct d3dx_pres_ins *ins)
 {
     unsigned int i;
 
-    TRACE("    %s ", pres_op_info[ins->op].mnem);
+    TRACE("%s ", pres_op_info[ins->op].mnem);
     dump_arg(rs, &ins->output, pres_op_info[ins->op].func_all_comps ? 1 : ins->component_count);
     for (i = 0; i < pres_op_info[ins->op].input_count; ++i)
     {
@@ -611,11 +653,24 @@ static void dump_ins(struct d3dx_regstore *rs, const struct d3dx_pres_ins *ins)
 
 static void dump_preshader(struct d3dx_preshader *pres)
 {
-    unsigned int i;
+    unsigned int i, immediate_count = pres->regs.table_sizes[PRES_REGTAB_IMMED] * 4;
+    const double *immediates = pres->regs.tables[PRES_REGTAB_IMMED];
 
+    if (immediate_count)
+        TRACE("// Immediates:\n");
+    for (i = 0; i < immediate_count; ++i)
+    {
+        if (!(i % 4))
+            TRACE("// ");
+        TRACE("%.8e", immediates[i]);
+        if (i % 4 == 3)
+            TRACE("\n");
+        else
+            TRACE(", ");
+    }
     TRACE("// Preshader registers:\n");
     dump_registers(&pres->inputs);
-    TRACE("    preshader\n");
+    TRACE("preshader\n");
     for (i = 0; i < pres->ins_count; ++i)
         dump_ins(&pres->regs, &pres->ins[i]);
 }
@@ -692,20 +747,48 @@ static HRESULT parse_preshader(struct d3dx_preshader *pres, unsigned int *ptr, u
     if (FAILED(hr))
         return hr;
 
-    pres->regs.table_sizes[PRES_REGTAB_IMMED] = const_count;
+    if (const_count % table_info[PRES_REGTAB_IMMED].reg_component_count)
+    {
+        FIXME("const_count %u is not a multiple of %u.\n", const_count,
+                table_info[PRES_REGTAB_IMMED].reg_component_count);
+        return D3DXERR_INVALIDDATA;
+    }
+    pres->regs.table_sizes[PRES_REGTAB_IMMED] = const_count
+            / table_info[PRES_REGTAB_IMMED].reg_component_count;
 
+    update_table_sizes_consts(pres->regs.table_sizes, &pres->inputs);
     for (i = 0; i < pres->ins_count; ++i)
     {
         for (j = 0; j < pres_op_info[pres->ins[i].op].input_count; ++j)
-            update_table_size(pres->regs.table_sizes, pres->ins[i].inputs[j].table,
-                    get_reg_offset(pres->ins[i].inputs[j].table,
-                    pres->ins[i].inputs[j].offset + pres->ins[i].component_count - 1));
+        {
+            enum pres_reg_tables table;
+            unsigned int reg_idx;
 
-        update_table_size(pres->regs.table_sizes, pres->ins[i].output.table,
-                get_reg_offset(pres->ins[i].output.table,
-                pres->ins[i].output.offset + pres->ins[i].component_count - 1));
+            if (pres->ins[i].inputs[j].index_reg.table == PRES_REGTAB_COUNT)
+            {
+                unsigned int last_component_index = pres->ins[i].scalar_op && !j ? 0
+                        : pres->ins[i].component_count - 1;
+
+                table = pres->ins[i].inputs[j].reg.table;
+                reg_idx = get_reg_offset(table, pres->ins[i].inputs[j].reg.offset
+                        + last_component_index);
+            }
+            else
+            {
+                table = pres->ins[i].inputs[j].index_reg.table;
+                reg_idx = get_reg_offset(table, pres->ins[i].inputs[j].index_reg.offset);
+            }
+            if (reg_idx >= pres->regs.table_sizes[table])
+            {
+                FIXME("Out of bounds register index, i %u, j %u, table %u, reg_idx %u.",
+                        i, j, table, reg_idx);
+                return D3DXERR_INVALIDDATA;
+            }
+        }
+        update_table_size(pres->regs.table_sizes, pres->ins[i].output.reg.table,
+                get_reg_offset(pres->ins[i].output.reg.table,
+                pres->ins[i].output.reg.offset + pres->ins[i].component_count - 1));
     }
-    update_table_sizes_consts(pres->regs.table_sizes, &pres->inputs);
     if (FAILED(regstore_alloc_table(&pres->regs, PRES_REGTAB_IMMED)))
         return E_OUTOFMEMORY;
     regstore_set_values(&pres->regs, PRES_REGTAB_IMMED, dconst, 0, const_count);
@@ -1088,18 +1171,61 @@ static HRESULT init_set_constants(struct d3dx_const_tab *const_tab, ID3DXConstan
     return ret;
 }
 
-static double exec_get_arg(struct d3dx_regstore *rs, const struct d3dx_pres_operand *opr, unsigned int comp)
+static double exec_get_reg_value(struct d3dx_regstore *rs, enum pres_reg_tables table, unsigned int offset)
 {
-    if (!regstore_is_val_set_reg(rs, opr->table, (opr->offset + comp) / table_info[opr->table].reg_component_count))
-        WARN("Using uninitialized input, table %u, offset %u.\n", opr->table, opr->offset + comp);
+    if (!regstore_is_val_set_reg(rs, table, offset / table_info[table].reg_component_count))
+        WARN("Using uninitialized input, table %u, offset %u.\n", table, offset);
 
-    return regstore_get_double(rs, opr->table, opr->offset + comp);
+    return regstore_get_double(rs, table, offset);
 }
 
-static void exec_set_arg(struct d3dx_regstore *rs, const struct d3dx_pres_operand *opr,
+static double exec_get_arg(struct d3dx_regstore *rs, const struct d3dx_pres_operand *opr, unsigned int comp)
+{
+    unsigned int offset, base_index, reg_index, table;
+
+    table = opr->reg.table;
+
+    if (opr->index_reg.table == PRES_REGTAB_COUNT)
+        base_index = 0;
+    else
+        base_index = lrint(exec_get_reg_value(rs, opr->index_reg.table, opr->index_reg.offset));
+
+    offset = base_index * table_info[table].reg_component_count + opr->reg.offset + comp;
+    reg_index = offset / table_info[table].reg_component_count;
+
+    if (reg_index >= rs->table_sizes[table])
+    {
+        unsigned int wrap_size;
+
+        if (table == PRES_REGTAB_CONST)
+        {
+            /* As it can be guessed from tests, offset into floating constant table is wrapped
+             * to the nearest power of 2 and not to the actual table size. */
+            for (wrap_size = 1; wrap_size < rs->table_sizes[table]; wrap_size <<= 1)
+                ;
+        }
+        else
+        {
+            wrap_size = rs->table_sizes[table];
+        }
+        WARN("Wrapping register index %u, table %u, wrap_size %u, table size %u.\n",
+                reg_index, table, wrap_size, rs->table_sizes[table]);
+        reg_index %= wrap_size;
+
+        if (reg_index >= rs->table_sizes[table])
+            return 0.0;
+
+        offset = reg_index * table_info[table].reg_component_count
+                + offset % table_info[table].reg_component_count;
+    }
+
+    return exec_get_reg_value(rs, table, offset);
+}
+
+static void exec_set_arg(struct d3dx_regstore *rs, const struct d3dx_pres_reg *reg,
         unsigned int comp, double res)
 {
-    regstore_set_double(rs, opr->table, opr->offset + comp, res);
+    regstore_set_double(rs, reg->table, reg->offset + comp, res);
 }
 
 #define ARGS_ARRAY_SIZE 8
@@ -1130,7 +1256,7 @@ static HRESULT execute_preshader(struct d3dx_preshader *pres)
             res = oi->func(args, ins->component_count);
 
             /* only 'dot' instruction currently falls here */
-            exec_set_arg(&pres->regs, &ins->output, 0, res);
+            exec_set_arg(&pres->regs, &ins->output.reg, 0, res);
         }
         else
         {
@@ -1139,7 +1265,7 @@ static HRESULT execute_preshader(struct d3dx_preshader *pres)
                 for (k = 0; k < oi->input_count; ++k)
                     args[k] = exec_get_arg(&pres->regs, &ins->inputs[k], ins->scalar_op && !k ? 0 : j);
                 res = oi->func(args, ins->component_count);
-                exec_set_arg(&pres->regs, &ins->output, j, res);
+                exec_set_arg(&pres->regs, &ins->output.reg, j, res);
             }
         }
     }
@@ -1189,8 +1315,8 @@ HRESULT d3dx_evaluate_parameter(struct d3dx_param_eval *peval, const struct d3dx
     return D3D_OK;
 }
 
-static HRESULT set_shader_constants_device(struct IDirect3DDevice9 *device, struct d3dx_regstore *rs,
-        D3DXPARAMETER_TYPE type, enum pres_reg_tables table)
+static HRESULT set_shader_constants_device(ID3DXEffectStateManager *manager, struct IDirect3DDevice9 *device,
+        struct d3dx_regstore *rs, D3DXPARAMETER_TYPE type, enum pres_reg_tables table)
 {
     unsigned int start, count;
     void *ptr;
@@ -1215,13 +1341,13 @@ static HRESULT set_shader_constants_device(struct IDirect3DDevice9 *device, stru
             switch(table)
             {
                 case PRES_REGTAB_OCONST:
-                    hr = IDirect3DDevice9_SetVertexShaderConstantF(device, start, (const float *)ptr, count);
+                    hr = SET_D3D_STATE_(manager, device, SetVertexShaderConstantF, start, (const float *)ptr, count);
                     break;
                 case PRES_REGTAB_OICONST:
-                    hr = IDirect3DDevice9_SetVertexShaderConstantI(device, start, (const int *)ptr, count);
+                    hr = SET_D3D_STATE_(manager, device, SetVertexShaderConstantI, start, (const int *)ptr, count);
                     break;
                 case PRES_REGTAB_OBCONST:
-                    hr = IDirect3DDevice9_SetVertexShaderConstantB(device, start, (const BOOL *)ptr, count);
+                    hr = SET_D3D_STATE_(manager, device, SetVertexShaderConstantB, start, (const BOOL *)ptr, count);
                     break;
                 default:
                     FIXME("Unexpected register table %u.\n", table);
@@ -1233,13 +1359,13 @@ static HRESULT set_shader_constants_device(struct IDirect3DDevice9 *device, stru
             switch(table)
             {
                 case PRES_REGTAB_OCONST:
-                    hr = IDirect3DDevice9_SetPixelShaderConstantF(device, start, (const float *)ptr, count);
+                    hr = SET_D3D_STATE_(manager, device, SetPixelShaderConstantF, start, (const float *)ptr, count);
                     break;
                 case PRES_REGTAB_OICONST:
-                    hr = IDirect3DDevice9_SetPixelShaderConstantI(device, start, (const int *)ptr, count);
+                    hr = SET_D3D_STATE_(manager, device, SetPixelShaderConstantI, start, (const int *)ptr, count);
                     break;
                 case PRES_REGTAB_OBCONST:
-                    hr = IDirect3DDevice9_SetPixelShaderConstantB(device, start, (const BOOL *)ptr, count);
+                    hr = SET_D3D_STATE_(manager, device, SetPixelShaderConstantB, start, (const BOOL *)ptr, count);
                     break;
                 default:
                     FIXME("Unexpected register table %u.\n", table);
@@ -1263,8 +1389,8 @@ static HRESULT set_shader_constants_device(struct IDirect3DDevice9 *device, stru
     return result;
 }
 
-HRESULT d3dx_param_eval_set_shader_constants(struct IDirect3DDevice9 *device, struct d3dx_param_eval *peval,
-        BOOL update_all)
+HRESULT d3dx_param_eval_set_shader_constants(ID3DXEffectStateManager *manager, struct IDirect3DDevice9 *device,
+        struct d3dx_param_eval *peval, BOOL update_all)
 {
     static const enum pres_reg_tables set_tables[] =
             {PRES_REGTAB_OCONST, PRES_REGTAB_OICONST, PRES_REGTAB_OBCONST};
@@ -1286,7 +1412,7 @@ HRESULT d3dx_param_eval_set_shader_constants(struct IDirect3DDevice9 *device, st
     result = D3D_OK;
     for (i = 0; i < ARRAY_SIZE(set_tables); ++i)
     {
-        if (FAILED(hr = set_shader_constants_device(device, rs, peval->param_type, set_tables[i])))
+        if (FAILED(hr = set_shader_constants_device(manager, device, rs, peval->param_type, set_tables[i])))
             result = hr;
     }
     return result;

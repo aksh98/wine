@@ -7454,7 +7454,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr ""
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr ""
 
@@ -11642,6 +11642,10 @@ msgstr ""
 #| msgid "Are you sure you want to delete these values?"
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "Ĉu vi certas pri forigo de ĉi tiuj valoroj?"
+
+#: regedit.rc:398
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr ""
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

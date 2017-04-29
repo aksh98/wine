@@ -7530,7 +7530,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr "クリップボードの内容を挿入します。"
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr "不明な形式"
 
@@ -12102,6 +12102,12 @@ msgstr ""
 #: regedit.rc:396
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "regedit: レジストリ クラス '%1' を削除できません。\n"
+
+#: regedit.rc:398
+#, fuzzy
+#| msgid "regedit: The line '%1' was not recognized.\n"
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr "regedit: '%1' は認識できない行です。\n"
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

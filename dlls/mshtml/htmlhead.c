@@ -32,11 +32,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
-typedef struct {
+struct HTMLTitleElement {
     HTMLElement element;
 
     IHTMLTitleElement IHTMLTitleElement_iface;
-} HTMLTitleElement;
+};
 
 static inline HTMLTitleElement *impl_from_IHTMLTitleElement(IHTMLTitleElement *iface)
 {
@@ -154,6 +154,7 @@ static void HTMLTitleElement_destructor(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLTitleElementImplVtbl = {
+    &CLSID_HTMLTitleElement,
     HTMLTitleElement_QI,
     HTMLTitleElement_destructor,
     HTMLElement_cpc,
@@ -191,11 +192,11 @@ HRESULT HTMLTitleElement_Create(HTMLDocumentNode *doc, nsIDOMHTMLElement *nselem
     return S_OK;
 }
 
-typedef struct {
+struct HTMLHtmlElement {
     HTMLElement element;
 
     IHTMLHtmlElement IHTMLHtmlElement_iface;
-} HTMLHtmlElement;
+};
 
 static inline HTMLHtmlElement *impl_from_IHTMLHtmlElement(IHTMLHtmlElement *iface)
 {
@@ -324,6 +325,7 @@ static BOOL HTMLHtmlElement_is_settable(HTMLDOMNode *iface, DISPID dispid)
 }
 
 static const NodeImplVtbl HTMLHtmlElementImplVtbl = {
+    &CLSID_HTMLHtmlElement,
     HTMLHtmlElement_QI,
     HTMLHtmlElement_destructor,
     HTMLElement_cpc,
@@ -374,11 +376,11 @@ HRESULT HTMLHtmlElement_Create(HTMLDocumentNode *doc, nsIDOMHTMLElement *nselem,
     return S_OK;
 }
 
-typedef struct {
+struct HTMLHeadElement {
     HTMLElement element;
 
     IHTMLHeadElement IHTMLHeadElement_iface;
-} HTMLHeadElement;
+};
 
 static inline HTMLHeadElement *impl_from_IHTMLHeadElement(IHTMLHeadElement *iface)
 {
@@ -497,6 +499,7 @@ static void HTMLHeadElement_destructor(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLHeadElementImplVtbl = {
+    &CLSID_HTMLHeadElement,
     HTMLHeadElement_QI,
     HTMLHeadElement_destructor,
     HTMLElement_cpc,

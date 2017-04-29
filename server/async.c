@@ -180,19 +180,18 @@ void async_terminate( struct async *async, unsigned int status )
     async->status = status;
     if (async->iosb && async->iosb->status == STATUS_PENDING) async->iosb->status = status;
 
-    if (async->data.callback)
+    if (async->data.user)
     {
         apc_call_t data;
 
         memset( &data, 0, sizeof(data) );
         data.type            = APC_ASYNC_IO;
-        data.async_io.func   = async->data.callback;
-        data.async_io.user   = async->data.arg;
+        data.async_io.user   = async->data.user;
         data.async_io.sb     = async->data.iosb;
         data.async_io.status = status;
         thread_queue_apc( async->thread, &async->obj, &data );
     }
-    else async_set_result( &async->obj, STATUS_SUCCESS, 0, 0, 0 );
+    else async_set_result( &async->obj, STATUS_SUCCESS, 0 );
 
     async_reselect( async );
     if (async->queue) release_object( async );  /* so that it gets destroyed when the async is done */
@@ -301,8 +300,7 @@ static void add_async_completion( struct async_queue *queue, apc_param_t cvalue,
 }
 
 /* store the result of the client-side async callback */
-void async_set_result( struct object *obj, unsigned int status, apc_param_t total,
-                       client_ptr_t apc, client_ptr_t apc_arg )
+void async_set_result( struct object *obj, unsigned int status, apc_param_t total )
 {
     struct async *async = (struct async *)obj;
 
@@ -328,15 +326,15 @@ void async_set_result( struct object *obj, unsigned int status, apc_param_t tota
         async->status = status;
         if (status == STATUS_MORE_PROCESSING_REQUIRED) return;  /* don't report the completion */
 
-        if (async->queue && async->data.cvalue)
-            add_async_completion( async->queue, async->data.cvalue, status, total );
-        if (apc)
+        if (async->queue && !async->data.apc && async->data.apc_context)
+            add_async_completion( async->queue, async->data.apc_context, status, total );
+        if (async->data.apc)
         {
             apc_call_t data;
             memset( &data, 0, sizeof(data) );
             data.type         = APC_USER;
-            data.user.func    = apc;
-            data.user.args[0] = apc_arg;
+            data.user.func    = async->data.apc;
+            data.user.args[0] = async->data.apc_context;
             data.user.args[1] = async->data.iosb;
             data.user.args[2] = 0;
             thread_queue_apc( async->thread, NULL, &data );
@@ -474,6 +472,11 @@ struct iosb *async_get_iosb( struct async *async )
     return async->iosb ? (struct iosb *)grab_object( async->iosb ) : NULL;
 }
 
+int async_is_blocking( struct async *async )
+{
+    return !async->event && !async->data.apc && !async->data.apc_context;
+}
+
 /* find the first pending async in queue */
 struct async *find_pending_async( struct async_queue *queue )
 {
@@ -504,7 +507,7 @@ DECL_HANDLER(get_async_result)
     struct async *async;
 
     LIST_FOR_EACH_ENTRY( async, &current->process->asyncs, struct async, process_entry )
-        if (async->data.arg == req->user_arg)
+        if (async->data.user == req->user_arg)
         {
             iosb = async->iosb;
             break;

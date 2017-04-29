@@ -194,8 +194,11 @@ struct d3dx_param_eval
 
 #define PARAMETER_FLAG_DIRTY 0x1u
 
+struct d3dx_shared_data;
+
 struct d3dx_parameter
 {
+    char magic_string[4];
     char *name;
     char *semantic;
     void *data;
@@ -211,20 +214,22 @@ struct d3dx_parameter
     DWORD runtime_flags;
     DWORD object_id;
 
-    D3DXHANDLE handle;
-
     struct d3dx_parameter *annotations;
     struct d3dx_parameter *members;
 
-    struct d3dx_parameter *referenced_param;
     struct d3dx_param_eval *param_eval;
 
-    DWORD *dirty_flag_ptr;
+    struct d3dx_parameter *top_level_param;
+    union
+    {
+        struct d3dx_parameter *referenced_param;
+        struct d3dx_shared_data *shared_data;
+    };
 };
 
 static inline BOOL is_param_dirty(struct d3dx_parameter *param)
 {
-    return *param->dirty_flag_ptr & PARAMETER_FLAG_DIRTY;
+    return param->top_level_param->runtime_flags & PARAMETER_FLAG_DIRTY;
 }
 
 struct d3dx9_base_effect;
@@ -232,12 +237,16 @@ struct d3dx9_base_effect;
 struct d3dx_parameter *get_parameter_by_name(struct d3dx9_base_effect *base,
         struct d3dx_parameter *parameter, const char *name) DECLSPEC_HIDDEN;
 
+#define SET_D3D_STATE_(manager, device, method, args...) (manager ? manager->lpVtbl->method(manager, args) \
+        : device->lpVtbl->method(device, args))
+#define SET_D3D_STATE(base_effect, args...) SET_D3D_STATE_(base_effect->manager, base_effect->device, args)
+
 void d3dx_create_param_eval(struct d3dx9_base_effect *base_effect, void *byte_code,
         unsigned int byte_code_size, D3DXPARAMETER_TYPE type, struct d3dx_param_eval **peval) DECLSPEC_HIDDEN;
 void d3dx_free_param_eval(struct d3dx_param_eval *peval) DECLSPEC_HIDDEN;
 HRESULT d3dx_evaluate_parameter(struct d3dx_param_eval *peval,
         const struct d3dx_parameter *param, void *param_value, BOOL update_all) DECLSPEC_HIDDEN;
-HRESULT d3dx_param_eval_set_shader_constants(struct IDirect3DDevice9 *device,
+HRESULT d3dx_param_eval_set_shader_constants(ID3DXEffectStateManager *manager, struct IDirect3DDevice9 *device,
         struct d3dx_param_eval *peval, BOOL update_all) DECLSPEC_HIDDEN;
 BOOL is_param_eval_input_dirty(struct d3dx_param_eval *peval) DECLSPEC_HIDDEN;
 

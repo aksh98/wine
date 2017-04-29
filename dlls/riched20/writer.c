@@ -723,8 +723,10 @@ ME_StreamOutRTFParaProps(ME_TextEditor *editor, ME_OutStream *pStream,
       sprintf(props + strlen(props), "\\shading%d", fmt->wShadingWeight);
     if (fmt->wShadingStyle & 0xF)
       strcat(props, style[fmt->wShadingStyle & 0xF]);
-    sprintf(props + strlen(props), "\\cfpat%d\\cbpat%d",
-            (fmt->wShadingStyle >> 4) & 0xF, (fmt->wShadingStyle >> 8) & 0xF);
+    if ((fmt->wShadingStyle >> 4) & 0xf)
+      sprintf(props + strlen(props), "\\cfpat%d", (fmt->wShadingStyle >> 4) & 0xf);
+    if ((fmt->wShadingStyle >> 8) & 0xf)
+      sprintf(props + strlen(props), "\\cbpat%d", (fmt->wShadingStyle >> 8) & 0xf);
   }
   if (*props)
     strcat(props, " ");
@@ -769,14 +771,14 @@ ME_StreamOutRTFCharProps(ME_OutStream *pStream, CHARFORMAT2W *fmt)
   }
 
   if ((old_fmt->dwEffects ^ fmt->dwEffects) & CFE_AUTOBACKCOLOR ||
-      old_fmt->crBackColor != fmt->crBackColor)
+      (!(fmt->dwEffects & CFE_AUTOBACKCOLOR) && old_fmt->crBackColor != fmt->crBackColor))
   {
       if (fmt->dwEffects & CFE_AUTOBACKCOLOR) i = 0;
       else find_color_in_colortbl( pStream, fmt->crBackColor, &i );
       sprintf(props + strlen(props), "\\cb%u", i);
   }
   if ((old_fmt->dwEffects ^ fmt->dwEffects) & CFE_AUTOCOLOR ||
-      old_fmt->crTextColor != fmt->crTextColor)
+      (!(fmt->dwEffects & CFE_AUTOCOLOR) && old_fmt->crTextColor != fmt->crTextColor))
   {
       if (fmt->dwEffects & CFE_AUTOCOLOR) i = 0;
       else find_color_in_colortbl( pStream, fmt->crTextColor, &i );

@@ -127,6 +127,7 @@ static struct wine_preload_info preload_info[] =
 #undef DUMP_SEGMENTS
 #undef DUMP_AUX_INFO
 #undef DUMP_SYMS
+#undef DUMP_MAPS
 
 /* older systems may not define these */
 #ifndef PT_TLS
@@ -290,30 +291,37 @@ static inline int wld_mprotect( const void *addr, size_t len, int prot )
     return SYSCALL_RET(ret);
 }
 
-static void *wld_mmap( void *start, size_t len, int prot, int flags, int fd, off_t offset )
-{
-    int ret;
-
-    struct
-    {
-        void        *addr;
-        unsigned int length;
-        unsigned int prot;
-        unsigned int flags;
-        unsigned int fd;
-        unsigned int offset;
-    } args;
-
-    args.addr   = start;
-    args.length = len;
-    args.prot   = prot;
-    args.flags  = flags;
-    args.fd     = fd;
-    args.offset = offset;
-    __asm__ __volatile__( "pushl %%ebx; movl %2,%%ebx; int $0x80; popl %%ebx"
-                          : "=a" (ret) : "0" (90 /* SYS_mmap */), "q" (&args) : "memory" );
-    return (void *)SYSCALL_RET(ret);
-}
+void *wld_mmap( void *start, size_t len, int prot, int flags, int fd, unsigned int offset );
+__ASM_GLOBAL_FUNC(wld_mmap,
+                  "\tpushl %ebp\n"
+                  __ASM_CFI(".cfi_adjust_cfa_offset 4\n\t")
+                  "\tpushl %ebx\n"
+                  __ASM_CFI(".cfi_adjust_cfa_offset 4\n\t")
+                  "\tpushl %esi\n"
+                  __ASM_CFI(".cfi_adjust_cfa_offset 4\n\t")
+                  "\tpushl %edi\n"
+                  __ASM_CFI(".cfi_adjust_cfa_offset 4\n\t")
+                  "\tmovl $192,%eax\n"      /* SYS_mmap2 */
+                  "\tmovl 20(%esp),%ebx\n"  /* start */
+                  "\tmovl 24(%esp),%ecx\n"  /* len */
+                  "\tmovl 28(%esp),%edx\n"  /* prot */
+                  "\tmovl 32(%esp),%esi\n"  /* flags */
+                  "\tmovl 36(%esp),%edi\n"  /* fd */
+                  "\tmovl 40(%esp),%ebp\n"  /* offset */
+                  "\tshrl $12,%ebp\n"
+                  "\tint $0x80\n"
+                  "\tcmpl $-4096,%eax\n"
+                  "\tjbe 1f\n"
+                  "\tmovl $-1,%eax\n"
+                  "1:\tpopl %edi\n"
+                  __ASM_CFI(".cfi_adjust_cfa_offset -4\n\t")
+                  "\tpopl %esi\n"
+                  __ASM_CFI(".cfi_adjust_cfa_offset -4\n\t")
+                  "\tpopl %ebx\n"
+                  __ASM_CFI(".cfi_adjust_cfa_offset -4\n\t")
+                  "\tpopl %ebp\n"
+                  __ASM_CFI(".cfi_adjust_cfa_offset -4\n\t")
+                  "\tret\n" )
 
 static inline uid_t wld_getuid(void)
 {
@@ -937,7 +945,7 @@ static unsigned int gnu_hash( const char *name )
 /*
  * Find a symbol in the symbol table of the executable loaded
  */
-static void *find_symbol( const ElfW(Phdr) *phdr, int num, const char *var, int type )
+static void *find_symbol( const struct wld_link_map *map, const char *var, int type )
 {
     const ElfW(Dyn) *dyn = NULL;
     const ElfW(Phdr) *ph;
@@ -949,21 +957,14 @@ static void *find_symbol( const ElfW(Phdr) *phdr, int num, const char *var, int 
 
     /* check the values */
 #ifdef DUMP_SYMS
-    wld_printf("%p %x\n", phdr, num );
+    wld_printf("%p %x\n", map->l_phdr, map->l_phnum );
 #endif
-    if( ( phdr == NULL ) || ( num == 0 ) )
-    {
-        wld_printf("could not find PT_DYNAMIC header entry\n");
-        return NULL;
-    }
-
     /* parse the (already loaded) ELF executable's header */
-    for (ph = phdr; ph < &phdr[num]; ++ph)
+    for (ph = map->l_phdr; ph < &map->l_phdr[map->l_phnum]; ++ph)
     {
         if( PT_DYNAMIC == ph->p_type )
         {
-            dyn = (void *) ph->p_vaddr;
-            num = ph->p_memsz / sizeof (*dyn);
+            dyn = (void *)(ph->p_vaddr + map->l_addr);
             break;
         }
     }
@@ -972,13 +973,13 @@ static void *find_symbol( const ElfW(Phdr) *phdr, int num, const char *var, int 
     while( dyn->d_tag )
     {
         if( dyn->d_tag == DT_STRTAB )
-            strings = (const char*) dyn->d_un.d_ptr;
+            strings = (const char*)(dyn->d_un.d_ptr + map->l_addr);
         if( dyn->d_tag == DT_SYMTAB )
-            symtab = (const ElfW(Sym) *)dyn->d_un.d_ptr;
+            symtab = (const ElfW(Sym) *)(dyn->d_un.d_ptr + map->l_addr);
         if( dyn->d_tag == DT_HASH )
-            hashtab = (const Elf32_Word *)dyn->d_un.d_ptr;
+            hashtab = (const Elf32_Word *)(dyn->d_un.d_ptr + map->l_addr);
         if( dyn->d_tag == DT_GNU_HASH )
-            gnu_hashtab = (const Elf32_Word *)dyn->d_un.d_ptr;
+            gnu_hashtab = (const Elf32_Word *)(dyn->d_un.d_ptr + map->l_addr);
 #ifdef DUMP_SYMS
         wld_printf("%lx %p\n", (unsigned long)dyn->d_tag, (void *)dyn->d_un.d_ptr );
 #endif
@@ -1028,7 +1029,7 @@ found:
 #ifdef DUMP_SYMS
     wld_printf("Found %s -> %p\n", strings + symtab[idx].st_name, (void *)symtab[idx].st_value );
 #endif
-    return (void *)symtab[idx].st_value;
+    return (void *)(symtab[idx].st_value + map->l_addr);
 }
 
 /*
@@ -1232,8 +1233,7 @@ void* wld_start( void **stack )
     map_so_lib( interp, &ld_so_map );
 
     /* store pointer to the preload info into the appropriate main binary variable */
-    wine_main_preload_info = find_symbol( main_binary_map.l_phdr, main_binary_map.l_phnum,
-                                          "wine_main_preload_info", STT_OBJECT );
+    wine_main_preload_info = find_symbol( &main_binary_map, "wine_main_preload_info", STT_OBJECT );
     if (wine_main_preload_info) *wine_main_preload_info = preload_info;
     else wld_printf( "wine_main_preload_info not found\n" );
 
@@ -1271,6 +1271,17 @@ void* wld_start( void **stack )
 #ifdef DUMP_AUX_INFO
     wld_printf("new stack = %p\n", *stack);
     wld_printf("jumping to %p\n", (void *)ld_so_map.l_entry);
+#endif
+#ifdef DUMP_MAPS
+    {
+        char buffer[1024];
+        int len, fd = wld_open( "/proc/self/maps", O_RDONLY );
+        if (fd != -1)
+        {
+            while ((len = wld_read( fd, buffer, sizeof(buffer) )) > 0) wld_write( 2, buffer, len );
+            wld_close( fd );
+        }
+    }
 #endif
 
     return (void *)ld_so_map.l_entry;

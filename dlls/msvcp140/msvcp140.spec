@@ -1689,8 +1689,8 @@
 @ stub ?_Xregex_error@std@@YAXW4error_type@regex_constants@1@@Z
 @ cdecl -arch=win32 ?_Xruntime_error@std@@YAXPBD@Z(str) _Xruntime_error
 @ cdecl -arch=win64 ?_Xruntime_error@std@@YAXPEBD@Z(str) _Xruntime_error
-@ stub -arch=win32 ?__ExceptionPtrAssign@@YAXPAXPBX@Z
-@ stub -arch=win64 ?__ExceptionPtrAssign@@YAXPEAXPEBX@Z
+@ cdecl -arch=win32 ?__ExceptionPtrAssign@@YAXPAXPBX@Z(ptr ptr) msvcr120.?__ExceptionPtrAssign@@YAXPAXPBX@Z
+@ cdecl -arch=win64 ?__ExceptionPtrAssign@@YAXPEAXPEBX@Z(ptr ptr) msvcr120.?__ExceptionPtrAssign@@YAXPEAXPEBX@Z
 @ cdecl -arch=win32 ?__ExceptionPtrCompare@@YA_NPBX0@Z(ptr ptr) msvcr120.?__ExceptionPtrCompare@@YA_NPBX0@Z
 @ cdecl -arch=win64 ?__ExceptionPtrCompare@@YA_NPEBX0@Z(ptr ptr) msvcr120.?__ExceptionPtrCompare@@YA_NPEBX0@Z
 @ cdecl -arch=win32 ?__ExceptionPtrCopy@@YAXPAXPBX@Z(ptr ptr) msvcr120.?__ExceptionPtrCopy@@YAXPAXPBX@Z
@@ -3752,8 +3752,8 @@
 @ cdecl _Xtime_diff_to_millis2(ptr ptr) _Xtime_diff_to_millis2
 @ cdecl -ret64 _Xtime_get_ticks() _Xtime_get_ticks
 @ stub __Wcrtomb_lk
-@ stub __crtCloseThreadpoolTimer
-@ stub __crtCloseThreadpoolWait
+@ cdecl __crtCloseThreadpoolTimer(ptr) MSVCP__crtCloseThreadpoolTimer
+@ cdecl __crtCloseThreadpoolWait(ptr) MSVCP__crtCloseThreadpoolWait
 @ cdecl __crtCompareStringA(long long str long str long) msvcrt.__crtCompareStringA
 @ stub __crtCompareStringEx
 @ cdecl __crtCompareStringW(long long wstr long wstr long) msvcrt.__crtCompareStringW
@@ -3762,9 +3762,9 @@
 @ stub __crtCreateSymbolicLinkW
 @ cdecl __crtCreateThreadpoolTimer(ptr ptr ptr) MSVCP__crtCreateThreadpoolTimer
 @ cdecl __crtCreateThreadpoolWait(ptr ptr ptr) MSVCP__crtCreateThreadpoolWait
-@ stub __crtFlushProcessWriteBuffers
-@ stub __crtFreeLibraryWhenCallbackReturns
-@ stub __crtGetCurrentProcessorNumber
+@ cdecl __crtFlushProcessWriteBuffers() MSVCP__crtFlushProcessWriteBuffers
+@ cdecl __crtFreeLibraryWhenCallbackReturns(ptr ptr) MSVCP__crtFreeLibraryWhenCallbackReturns
+@ cdecl __crtGetCurrentProcessorNumber() MSVCP__crtGetCurrentProcessorNumber
 @ stub __crtGetFileInformationByHandleEx
 @ stub __crtGetLocaleInfoEx
 @ stub __crtGetSystemTimePreciseAsFileTime
@@ -3778,6 +3778,6 @@
 @ stub __crtSetFileInformationByHandle
 @ cdecl __crtSetThreadpoolTimer(ptr ptr long long) MSVCP__crtSetThreadpoolTimer
 @ cdecl __crtSetThreadpoolWait(ptr long ptr) MSVCP__crtSetThreadpoolWait
-@ stub __crtWaitForThreadpoolTimerCallbacks
+@ cdecl __crtWaitForThreadpoolTimerCallbacks(ptr long) MSVCP__crtWaitForThreadpoolTimerCallbacks
 @ stub __set_stl_sync_api_mode
 @ cdecl xtime_get(ptr long) xtime_get

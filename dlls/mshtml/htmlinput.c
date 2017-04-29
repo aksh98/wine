@@ -34,14 +34,14 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
-typedef struct {
+struct HTMLInputElement {
     HTMLElement element;
 
     IHTMLInputElement IHTMLInputElement_iface;
     IHTMLInputTextElement IHTMLInputTextElement_iface;
 
     nsIDOMHTMLInputElement *nsinput;
-} HTMLInputElement;
+};
 
 static const WCHAR forW[] = {'f','o','r',0};
 
@@ -1317,6 +1317,7 @@ static void HTMLInputElement_unlink(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLInputElementImplVtbl = {
+    &CLSID_HTMLInputElement,
     HTMLInputElement_QI,
     HTMLElement_destructor,
     HTMLElement_cpc,
@@ -1371,11 +1372,11 @@ HRESULT HTMLInputElement_Create(HTMLDocumentNode *doc, nsIDOMHTMLElement *nselem
     return S_OK;
 }
 
-typedef struct {
+struct HTMLLabelElement {
     HTMLElement element;
 
     IHTMLLabelElement IHTMLLabelElement_iface;
-} HTMLLabelElement;
+};
 
 static inline HTMLLabelElement *impl_from_IHTMLLabelElement(IHTMLLabelElement *iface)
 {
@@ -1522,6 +1523,7 @@ static HRESULT HTMLLabelElement_QI(HTMLDOMNode *iface, REFIID riid, void **ppv)
 }
 
 static const NodeImplVtbl HTMLLabelElementImplVtbl = {
+    &CLSID_HTMLLabelElement,
     HTMLLabelElement_QI,
     HTMLElement_destructor,
     HTMLElement_cpc,
@@ -1559,13 +1561,13 @@ HRESULT HTMLLabelElement_Create(HTMLDocumentNode *doc, nsIDOMHTMLElement *nselem
     return S_OK;
 }
 
-typedef struct {
+struct HTMLButtonElement {
     HTMLElement element;
 
     IHTMLButtonElement IHTMLButtonElement_iface;
 
     nsIDOMHTMLButtonElement *nsbutton;
-} HTMLButtonElement;
+};
 
 static inline HTMLButtonElement *impl_from_IHTMLButtonElement(IHTMLButtonElement *iface)
 {
@@ -1861,6 +1863,7 @@ static void HTMLButtonElement_unlink(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLButtonElementImplVtbl = {
+    &CLSID_HTMLButtonElement,
     HTMLButtonElement_QI,
     HTMLElement_destructor,
     HTMLElement_cpc,

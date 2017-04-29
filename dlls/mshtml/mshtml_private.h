@@ -316,7 +316,7 @@ HRESULT dispex_get_dynid(DispatchEx*,const WCHAR*,DISPID*) DECLSPEC_HIDDEN;
 void dispex_traverse(DispatchEx*,nsCycleCollectionTraversalCallback*) DECLSPEC_HIDDEN;
 void dispex_unlink(DispatchEx*) DECLSPEC_HIDDEN;
 void release_typelib(void) DECLSPEC_HIDDEN;
-HRESULT get_htmldoc_classinfo(ITypeInfo **typeinfo) DECLSPEC_HIDDEN;
+HRESULT get_class_typeinfo(const CLSID*,ITypeInfo**) DECLSPEC_HIDDEN;
 const dispex_static_data_vtbl_t *dispex_get_vtbl(DispatchEx*) DECLSPEC_HIDDEN;
 void dispex_info_add_interface(dispex_data_t*,tid_t) DECLSPEC_HIDDEN;
 
@@ -431,6 +431,7 @@ struct HTMLWindow {
     IServiceProvider   IServiceProvider_iface;
     ITravelLogClient   ITravelLogClient_iface;
     IObjectIdentity    IObjectIdentity_iface;
+    IProvideMultipleClassInfo IProvideMultipleClassInfo_iface;
 
     LONG ref;
 
@@ -575,7 +576,7 @@ struct HTMLDocument {
     IObjectWithSite             IObjectWithSite_iface;
     IOleContainer               IOleContainer_iface;
     IObjectSafety               IObjectSafety_iface;
-    IProvideClassInfo           IProvideClassInfo_iface;
+    IProvideMultipleClassInfo   IProvideMultipleClassInfo_iface;
 
     IUnknown *outer_unk;
     IDispatchEx *dispex;
@@ -689,6 +690,7 @@ struct NSContainer {
 };
 
 typedef struct {
+    const CLSID *clsid;
     HRESULT (*qi)(HTMLDOMNode*,REFIID,void**);
     void (*destructor)(HTMLDOMNode*);
     const cpc_entry_t *cpc_entries;
@@ -744,6 +746,7 @@ typedef struct {
     IHTMLElement6 IHTMLElement6_iface;
     IHTMLUniqueName IHTMLUniqueName_iface;
     IElementSelector IElementSelector_iface;
+    IProvideMultipleClassInfo IProvideMultipleClassInfo_iface;
 
     nsIDOMHTMLElement *nselem;
     HTMLStyle *style;

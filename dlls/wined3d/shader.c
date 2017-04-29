@@ -74,6 +74,7 @@ static const char * const shader_opcode_names[] =
     /* WINED3DSIH_DCL_FUNCTION_BODY                */ "dcl_function_body",
     /* WINED3DSIH_DCL_FUNCTION_TABLE               */ "dcl_function_table",
     /* WINED3DSIH_DCL_GLOBAL_FLAGS                 */ "dcl_globalFlags",
+    /* WINED3DSIH_DCL_GS_INSTANCES                 */ "dcl_gs_instances",
     /* WINED3DSIH_DCL_HS_FORK_PHASE_INSTANCE_COUNT */ "dcl_hs_fork_phase_instance_count",
     /* WINED3DSIH_DCL_HS_JOIN_PHASE_INSTANCE_COUNT */ "dcl_hs_join_phase_instance_count",
     /* WINED3DSIH_DCL_HS_MAX_TESSFACTOR            */ "dcl_hs_max_tessfactor",
@@ -145,12 +146,14 @@ static const char * const shader_opcode_names[] =
     /* WINED3DSIH_FTOU                             */ "ftou",
     /* WINED3DSIH_GATHER4                          */ "gather4",
     /* WINED3DSIH_GATHER4_C                        */ "gather4_c",
+    /* WINED3DSIH_GATHER4_PO                       */ "gather4_po",
     /* WINED3DSIH_GE                               */ "ge",
     /* WINED3DSIH_HS_CONTROL_POINT_PHASE           */ "hs_control_point_phase",
     /* WINED3DSIH_HS_DECLS                         */ "hs_decls",
     /* WINED3DSIH_HS_FORK_PHASE                    */ "hs_fork_phase",
     /* WINED3DSIH_HS_JOIN_PHASE                    */ "hs_join_phase",
     /* WINED3DSIH_IADD                             */ "iadd",
+    /* WINED3DSIH_IBFE                             */ "ibfe",
     /* WINED3DSIH_IEQ                              */ "ieq",
     /* WINED3DSIH_IF                               */ "if",
     /* WINED3DSIH_IFC                              */ "ifc",
@@ -213,6 +216,7 @@ static const char * const shader_opcode_names[] =
     /* WINED3DSIH_REP                              */ "rep",
     /* WINED3DSIH_RESINFO                          */ "resinfo",
     /* WINED3DSIH_RET                              */ "ret",
+    /* WINED3DSIH_RETP                             */ "retp",
     /* WINED3DSIH_ROUND_NE                         */ "round_ne",
     /* WINED3DSIH_ROUND_NI                         */ "round_ni",
     /* WINED3DSIH_ROUND_PI                         */ "round_pi",
@@ -378,6 +382,7 @@ static void shader_signature_from_semantic(struct wined3d_shader_signature_eleme
 {
     e->semantic_name = shader_semantic_name_from_usage(s->usage);
     e->semantic_idx = s->usage_idx;
+    e->stream_idx = 0;
     e->sysval_semantic = shader_sysval_semantic_from_usage(s->usage);
     e->component_type = WINED3D_TYPE_FLOAT;
     e->register_idx = s->reg.reg.idx[0].offset;
@@ -389,6 +394,7 @@ static void shader_signature_from_usage(struct wined3d_shader_signature_element 
 {
     e->semantic_name = shader_semantic_name_from_usage(usage);
     e->semantic_idx = usage_idx;
+    e->stream_idx = 0;
     e->sysval_semantic = shader_sysval_semantic_from_usage(usage);
     e->component_type = WINED3D_TYPE_FLOAT;
     e->register_idx = reg_idx;
@@ -1014,6 +1020,14 @@ static HRESULT shader_get_registers_used(struct wined3d_shader *shader, const st
             else
                 reg_maps->cb_sizes[reg->idx[0].offset] = reg->idx[1].offset;
         }
+        else if (ins.handler_idx == WINED3DSIH_DCL_GS_INSTANCES)
+        {
+            if (shader_version.type == WINED3D_SHADER_TYPE_GEOMETRY)
+                shader->u.gs.instance_count = ins.declaration.count;
+            else
+                FIXME("Invalid instruction %#x for shader type %#x.\n",
+                        ins.handler_idx, shader_version.type);
+        }
         else if (ins.handler_idx == WINED3DSIH_DCL_IMMEDIATE_CONSTANT_BUFFER)
         {
             if (reg_maps->icb)
@@ -1445,7 +1459,9 @@ static HRESULT shader_get_registers_used(struct wined3d_shader *shader, const st
             {
                 --cur_loop_depth;
             }
-            else if (ins.handler_idx == WINED3DSIH_SAMPLE
+            else if (ins.handler_idx == WINED3DSIH_GATHER4
+                    || ins.handler_idx == WINED3DSIH_GATHER4_C
+                    || ins.handler_idx == WINED3DSIH_SAMPLE
                     || ins.handler_idx == WINED3DSIH_SAMPLE_B
                     || ins.handler_idx == WINED3DSIH_SAMPLE_C
                     || ins.handler_idx == WINED3DSIH_SAMPLE_C_LZ
@@ -1454,6 +1470,11 @@ static HRESULT shader_get_registers_used(struct wined3d_shader *shader, const st
             {
                 shader_record_sample(reg_maps, ins.src[1].reg.idx[0].offset,
                         ins.src[2].reg.idx[0].offset, reg_maps->sampler_map.count);
+            }
+            else if (ins.handler_idx == WINED3DSIH_GATHER4_PO)
+            {
+                shader_record_sample(reg_maps, ins.src[2].reg.idx[0].offset,
+                        ins.src[3].reg.idx[0].offset, reg_maps->sampler_map.count);
             }
             else if (ins.handler_idx == WINED3DSIH_BUFINFO && ins.src[0].reg.type == WINED3DSPR_RESOURCE)
             {
@@ -2110,6 +2131,10 @@ static void shader_dump_register(struct wined3d_string_buffer *buffer,
             shader_addline(buffer, "oMask");
             break;
 
+        case WINED3DSPR_GSINSTID:
+            shader_addline(buffer, "vGSInstanceID");
+            break;
+
         default:
             shader_addline(buffer, "<unhandled_rtype(%#x)>", reg->type);
             break;
@@ -2632,11 +2657,12 @@ static void shader_trace_init(const struct wined3d_shader_frontend *fe, void *fe
                 shader_addline(&buffer, ", comparisonMode");
         }
         else if (ins.handler_idx == WINED3DSIH_DCL_TEMPS
-                || ins.handler_idx == WINED3DSIH_DCL_VERTICES_OUT
+                || ins.handler_idx == WINED3DSIH_DCL_GS_INSTANCES
                 || ins.handler_idx == WINED3DSIH_DCL_HS_FORK_PHASE_INSTANCE_COUNT
                 || ins.handler_idx == WINED3DSIH_DCL_HS_JOIN_PHASE_INSTANCE_COUNT
                 || ins.handler_idx == WINED3DSIH_DCL_INPUT_CONTROL_POINT_COUNT
-                || ins.handler_idx == WINED3DSIH_DCL_OUTPUT_CONTROL_POINT_COUNT)
+                || ins.handler_idx == WINED3DSIH_DCL_OUTPUT_CONTROL_POINT_COUNT
+                || ins.handler_idx == WINED3DSIH_DCL_VERTICES_OUT)
         {
             shader_addline(&buffer, "%s %u", shader_opcode_names[ins.handler_idx], ins.declaration.count);
         }
@@ -2728,7 +2754,8 @@ static void shader_trace_init(const struct wined3d_shader_frontend *fe, void *fe
             shader_addline(&buffer, "%s", shader_opcode_names[ins.handler_idx]);
 
             if (ins.handler_idx == WINED3DSIH_BREAKP
-                    || ins.handler_idx == WINED3DSIH_IF)
+                    || ins.handler_idx == WINED3DSIH_IF
+                    || ins.handler_idx == WINED3DSIH_RETP)
             {
                 switch (ins.flags)
                 {
@@ -2839,6 +2866,7 @@ struct shader_none_priv
 };
 
 static void shader_none_handle_instruction(const struct wined3d_shader_instruction *ins) {}
+static void shader_none_precompile(void *shader_priv, struct wined3d_shader *shader) {}
 static void shader_none_select_compute(void *shader_priv, struct wined3d_context *context,
         const struct wined3d_state *state) {}
 static void shader_none_update_float_vertex_constants(struct wined3d_device *device, UINT start, UINT count) {}
@@ -2961,6 +2989,7 @@ static BOOL shader_none_has_ffp_proj_control(void *shader_priv)
 const struct wined3d_shader_backend_ops none_shader_backend =
 {
     shader_none_handle_instruction,
+    shader_none_precompile,
     shader_none_select,
     shader_none_select_compute,
     shader_none_disable,
@@ -3058,6 +3087,16 @@ ULONG CDECL wined3d_shader_incref(struct wined3d_shader *shader)
     TRACE("%p increasing refcount to %u.\n", shader, refcount);
 
     return refcount;
+}
+
+static void wined3d_shader_init_object(void *object)
+{
+    struct wined3d_shader *shader = object;
+    struct wined3d_device *device = shader->device;
+
+    list_add_head(&device->shaders, &shader->shader_list_entry);
+
+    device->shader_backend->shader_precompile(device->shader_priv, shader);
 }
 
 static void wined3d_shader_destroy_object(void *object)
@@ -3314,7 +3353,7 @@ static HRESULT shader_init(struct wined3d_shader *shader, struct wined3d_device 
     list_init(&shader->constantsI);
     shader->lconst_inf_or_nan = FALSE;
     list_init(&shader->reg_maps.indexable_temps);
-    list_add_head(&device->shaders, &shader->shader_list_entry);
+    list_init(&shader->shader_list_entry);
 
     byte_code_size = desc->byte_code_size;
     if (byte_code_size == ~(size_t)0)
@@ -3353,9 +3392,12 @@ static HRESULT shader_init(struct wined3d_shader *shader, struct wined3d_device 
     {
         WARN("Failed to set function, hr %#x.\n", hr);
         shader_cleanup(shader);
+        return hr;
     }
 
     shader->load_local_constsF = shader->lconst_inf_or_nan;
+
+    wined3d_cs_init_object(shader->device->cs, wined3d_shader_init_object, shader);
 
     return hr;
 }
@@ -3405,21 +3447,23 @@ static HRESULT geometry_shader_init(struct wined3d_shader *shader, struct wined3
         const struct wined3d_shader_desc *desc, const struct wined3d_stream_output_desc *so_desc,
         void *parent, const struct wined3d_parent_ops *parent_ops)
 {
+    struct wined3d_stream_output_element *elements = NULL;
     HRESULT hr;
 
+    if (so_desc && !(elements = wined3d_calloc(so_desc->element_count, sizeof(*elements))))
+        return E_OUTOFMEMORY;
+
     if (FAILED(hr = shader_init(shader, device, desc, 0, WINED3D_SHADER_TYPE_GEOMETRY, parent, parent_ops)))
+    {
+        HeapFree(GetProcessHeap(), 0, elements);
         return hr;
+    }
 
     if (so_desc)
     {
-        struct wined3d_stream_output_desc *d = &shader->u.gs.so_desc;
-        *d = *so_desc;
-        if (!(d->elements = wined3d_calloc(so_desc->element_count, sizeof(*d->elements))))
-        {
-            shader_cleanup(shader);
-            return E_OUTOFMEMORY;
-        }
-        memcpy(d->elements, so_desc->elements, so_desc->element_count * sizeof(*d->elements));
+        shader->u.gs.so_desc = *so_desc;
+        shader->u.gs.so_desc.elements = elements;
+        memcpy(elements, so_desc->elements, so_desc->element_count * sizeof(*elements));
     }
 
     return WINED3D_OK;

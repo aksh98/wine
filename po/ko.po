@@ -7596,7 +7596,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr "당신의 문서에 클립보드의 내용 삽입하기."
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr "알수 없는 형식"
 
@@ -12379,6 +12379,12 @@ msgstr "오류: 이 시스템에서 지정된 레지스트리 키나 값을 찾�
 #| msgid "Error: Unable to add keys to remote machine\n"
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "오류: 원격 머신에  키를 더하는 것은 가능하지 않습니다\n"
+
+#: regedit.rc:398
+#, fuzzy
+#| msgid "No command was specified."
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr "어떤 명령도 정의되지 않았습니다."
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

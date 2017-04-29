@@ -617,18 +617,14 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
     - (void) viewDidHide
     {
         [super viewDidHide];
-        if ([self hasGLContext])
-            [self invalidateHasGLDescendant];
+        [self invalidateHasGLDescendant];
     }
 
     - (void) viewDidUnhide
     {
         [super viewDidUnhide];
-        if ([self hasGLContext])
-        {
-            [self updateGLContexts:YES];
-            [self invalidateHasGLDescendant];
-        }
+        [self updateGLContexts:YES];
+        [self invalidateHasGLDescendant];
     }
 
     - (void) completeText:(NSString*)text
@@ -982,7 +978,8 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
             NSUInteger style = [self styleMask];
 
             if (behavior & NSWindowCollectionBehaviorParticipatesInCycle &&
-                style & NSResizableWindowMask && !(style & NSUtilityWindowMask) && !maximized)
+                style & NSResizableWindowMask && !(style & NSUtilityWindowMask) && !maximized &&
+                !(self.parentWindow || self.latentParentWindow))
             {
                 behavior |= NSWindowCollectionBehaviorFullScreenPrimary;
                 behavior &= ~NSWindowCollectionBehaviorFullScreenAuxiliary;
@@ -1251,6 +1248,60 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         [latentChildWindows removeObjectIdenticalTo:child];
     }
 
+    - (void) setChildWineWindows:(NSArray*)childWindows
+    {
+        NSArray* origChildren;
+        NSUInteger count, start, limit, i;
+
+        origChildren = self.childWineWindows;
+
+        // If the current and desired children arrays match up to a point, leave
+        // those matching children alone.
+        count = childWindows.count;
+        limit = MIN(origChildren.count, count);
+        for (start = 0; start < limit; start++)
+        {
+            if ([origChildren objectAtIndex:start] != [childWindows objectAtIndex:start])
+                break;
+        }
+
+        // Remove all of the child windows and re-add them back-to-front so they
+        // are in the desired order.
+        for (i = start; i < count; i++)
+        {
+            WineWindow* child = [childWindows objectAtIndex:i];
+            [self removeChildWindow:child];
+        }
+        for (i = start; i < count; i++)
+        {
+            WineWindow* child = [childWindows objectAtIndex:i];
+            [self addChildWindow:child ordered:NSWindowAbove];
+        }
+    }
+
+    static NSComparisonResult compare_windows_back_to_front(NSWindow* window1, NSWindow* window2, NSArray* windowNumbers)
+    {
+        NSNumber* window1Number = [NSNumber numberWithInteger:[window1 windowNumber]];
+        NSNumber* window2Number = [NSNumber numberWithInteger:[window2 windowNumber]];
+        NSUInteger index1 = [windowNumbers indexOfObject:window1Number];
+        NSUInteger index2 = [windowNumbers indexOfObject:window2Number];
+        if (index1 == NSNotFound)
+        {
+            if (index2 == NSNotFound)
+                return NSOrderedSame;
+            else
+                return NSOrderedAscending;
+        }
+        else if (index2 == NSNotFound)
+            return NSOrderedDescending;
+        else if (index1 < index2)
+            return NSOrderedDescending;
+        else if (index2 < index1)
+            return NSOrderedAscending;
+
+        return NSOrderedSame;
+    }
+
     - (BOOL) becameEligibleParentOrChild
     {
         BOOL reordered = FALSE;
@@ -1271,8 +1322,12 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         // again after actually making us visible.
         if ([self isVisible] && (count = [latentChildWindows count]))
         {
+            NSMutableArray* windowNumbers;
+            NSMutableArray* childWindows = [[self.childWineWindows mutableCopy] autorelease];
             NSMutableIndexSet* indexesToRemove = [NSMutableIndexSet indexSet];
             NSUInteger i;
+
+            windowNumbers = [[[[self class] windowNumbersWithOptions:NSWindowNumberListAllSpaces] mutableCopy] autorelease];
 
             for (i = 0; i < count; i++)
             {
@@ -1283,7 +1338,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
                     {
                         if ([self level] > [child level])
                             [child setLevel:[self level]];
-                        [self addChildWindow:child ordered:NSWindowAbove];
+                        [childWindows addObject:child];
                         child.latentParentWindow = nil;
                         reordered = TRUE;
                     }
@@ -1294,6 +1349,12 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
             }
 
             [latentChildWindows removeObjectsAtIndexes:indexesToRemove];
+
+            [childWindows sortWithOptions:NSSortStable
+                          usingComparator:^NSComparisonResult(id obj1, id obj2){
+                return compare_windows_back_to_front(obj1, obj2, windowNumbers);
+            }];
+            [self setChildWineWindows:childWindows];
         }
 
         return reordered;
@@ -1388,7 +1449,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
     {
         NSMutableArray* windowNumbers;
         NSNumber* childWindowNumber;
-        NSUInteger otherIndex, limit;
+        NSUInteger otherIndex;
         NSArray* origChildren;
         NSMutableArray* children;
 
@@ -1397,8 +1458,15 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         windowNumbers = [[[[self class] windowNumbersWithOptions:NSWindowNumberListAllSpaces] mutableCopy] autorelease];
         childWindowNumber = [NSNumber numberWithInteger:[child windowNumber]];
         [windowNumbers removeObject:childWindowNumber];
-        otherIndex = [windowNumbers indexOfObject:[NSNumber numberWithInteger:[other windowNumber]]];
-        [windowNumbers insertObject:childWindowNumber atIndex:otherIndex + (mode == NSWindowAbove ? 0 : 1)];
+        if (other)
+        {
+            otherIndex = [windowNumbers indexOfObject:[NSNumber numberWithInteger:[other windowNumber]]];
+            [windowNumbers insertObject:childWindowNumber atIndex:otherIndex + (mode == NSWindowAbove ? 0 : 1)];
+        }
+        else if (mode == NSWindowAbove)
+            [windowNumbers insertObject:childWindowNumber atIndex:0];
+        else
+            [windowNumbers addObject:childWindowNumber];
 
         // Get our child windows and sort them in the reverse of the desired
         // z-order (back-to-front).
@@ -1406,43 +1474,56 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         children = [[origChildren mutableCopy] autorelease];
         [children sortWithOptions:NSSortStable
                   usingComparator:^NSComparisonResult(id obj1, id obj2){
-            NSNumber* window1Number = [NSNumber numberWithInteger:[obj1 windowNumber]];
-            NSNumber* window2Number = [NSNumber numberWithInteger:[obj2 windowNumber]];
-            NSUInteger index1 = [windowNumbers indexOfObject:window1Number];
-            NSUInteger index2 = [windowNumbers indexOfObject:window2Number];
-            if (index1 == NSNotFound)
-            {
-                if (index2 == NSNotFound)
-                    return NSOrderedSame;
-                else
-                    return NSOrderedAscending;
-            }
-            else if (index2 == NSNotFound)
-                return NSOrderedDescending;
-            else if (index1 < index2)
-                return NSOrderedDescending;
-            else if (index2 < index1)
-                return NSOrderedAscending;
-
-            return NSOrderedSame;
+            return compare_windows_back_to_front(obj1, obj2, windowNumbers);
         }];
 
-        // If the current and desired children arrays match up to a point, leave
-        // those matching children alone.
-        limit = MIN([origChildren count], [children count]);
-        for (otherIndex = 0; otherIndex < limit; otherIndex++)
-        {
-            if ([origChildren objectAtIndex:otherIndex] != [children objectAtIndex:otherIndex])
-                break;
-        }
-        [children removeObjectsInRange:NSMakeRange(0, otherIndex)];
+        [self setChildWineWindows:children];
+    }
 
-        // Remove all of the child windows and re-add them back-to-front so they
-        // are in the desired order.
-        for (other in children)
-            [self removeChildWindow:other];
-        for (other in children)
-            [self addChildWindow:other ordered:NSWindowAbove];
+    // Search the ancestor windows of self and other to find a place where some ancestors are siblings of each other.
+    // There are three possible results in terms of the values of *ancestor and *ancestorOfOther on return:
+    //      (non-nil, non-nil)  there is a level in the window tree where the two windows have sibling ancestors
+    //                          if *ancestor has a parent Wine window, then it's the parent of the other ancestor, too
+    //                          otherwise, the two ancestors are each roots of disjoint window trees
+    //      (nil, non-nil)      the other window is a descendent of self and *ancestorOfOther is the direct child
+    //      (non-nil, nil)      self is a descendent of other and *ancestor is the direct child
+    - (void) getSiblingWindowsForWindow:(WineWindow*)other ancestor:(WineWindow**)ancestor ancestorOfOther:(WineWindow**)ancestorOfOther
+    {
+        NSMutableArray* otherAncestors = [NSMutableArray arrayWithObject:other];
+        WineWindow* child;
+        WineWindow* parent;
+        for (child = other;
+             (parent = (WineWindow*)child.parentWindow) && [parent isKindOfClass:[WineWindow class]];
+             child = parent)
+        {
+            if (parent == self)
+            {
+                *ancestor = nil;
+                *ancestorOfOther = child;
+                return;
+            }
+
+            [otherAncestors addObject:parent];
+        }
+
+        for (child = self;
+             (parent = (WineWindow*)child.parentWindow) && [parent isKindOfClass:[WineWindow class]];
+             child = parent)
+        {
+            NSUInteger index = [otherAncestors indexOfObjectIdenticalTo:parent];
+            if (index != NSNotFound)
+            {
+                *ancestor = child;
+                if (index == 0)
+                    *ancestorOfOther = nil;
+                else
+                    *ancestorOfOther = [otherAncestors objectAtIndex:index - 1];
+                return;
+            }
+        }
+
+        *ancestor = child;
+        *ancestorOfOther = otherAncestors.lastObject;;
     }
 
     /* Returns whether or not the window was ordered in, which depends on if
@@ -1454,6 +1535,8 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         {
             BOOL needAdjustWindowLevels = FALSE;
             BOOL wasVisible;
+            WineWindow* parent;
+            WineWindow* child;
 
             [controller transformProcessToForeground];
             if ([NSApp isHidden])
@@ -1475,30 +1558,53 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
 
                 if (![self isOrdered:orderingMode relativeTo:other])
                 {
-                    WineWindow* parent = (WineWindow*)[self parentWindow];
-                    WineWindow* otherParent = (WineWindow*)[other parentWindow];
+                    WineWindow* ancestor;
+                    WineWindow* ancestorOfOther;
 
-                    // This window level may not be right for this window based
-                    // on floating-ness, fullscreen-ness, etc.  But we set it
-                    // temporarily to allow us to order the windows properly.
-                    // Then the levels get fixed by -adjustWindowLevels.
-                    if ([self level] != [other level])
-                        [self setLevel:[other level]];
-                    [self setAutodisplay:YES];
-                    [self orderWindow:orderingMode relativeTo:[other windowNumber]];
-                    [self checkWineDisplayLink];
+                    [self getSiblingWindowsForWindow:other ancestor:&ancestor ancestorOfOther:&ancestorOfOther];
+                    if (ancestor)
+                    {
+                        [self setAutodisplay:YES];
+                        if (ancestorOfOther)
+                        {
+                            // This window level may not be right for this window based
+                            // on floating-ness, fullscreen-ness, etc.  But we set it
+                            // temporarily to allow us to order the windows properly.
+                            // Then the levels get fixed by -adjustWindowLevels.
+                            if ([ancestor level] != [ancestorOfOther level])
+                                [ancestor setLevel:[ancestorOfOther level]];
 
-                    // The above call to -[NSWindow orderWindow:relativeTo:] won't
-                    // reorder windows which are both children of the same parent
-                    // relative to each other, so do that separately.
-                    if (parent && parent == otherParent)
-                        [parent order:orderingMode childWindow:self relativeTo:other];
+                            parent = (WineWindow*)ancestor.parentWindow;
+                            if ([parent isKindOfClass:[WineWindow class]])
+                                [parent order:orderingMode childWindow:ancestor relativeTo:ancestorOfOther];
+                            else
+                                [ancestor orderWindow:orderingMode relativeTo:[ancestorOfOther windowNumber]];
+                        }
 
-                    needAdjustWindowLevels = TRUE;
+                        for (child = self;
+                             (parent = (WineWindow*)child.parentWindow);
+                             child = parent)
+                        {
+                            if ([parent isKindOfClass:[WineWindow class]])
+                                [parent order:-orderingMode childWindow:child relativeTo:nil];
+                            if (parent == ancestor)
+                                break;
+                        }
+
+                        [self checkWineDisplayLink];
+                        needAdjustWindowLevels = TRUE;
+                    }
                 }
             }
             else
             {
+                for (child = self;
+                     (parent = (WineWindow*)child.parentWindow) && [parent isKindOfClass:[WineWindow class]];
+                     child = parent)
+                {
+                    [parent order:NSWindowAbove childWindow:child relativeTo:nil];
+                }
+
                 // Again, temporarily set level to make sure we can order to
                 // the right place.
                 next = [controller frontWineWindow];
@@ -1509,6 +1615,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
                 [self checkWineDisplayLink];
                 needAdjustWindowLevels = TRUE;
             }
+            pendingOrderOut = FALSE;
 
             if ([self becameEligibleParentOrChild])
                 needAdjustWindowLevels = TRUE;
@@ -1544,6 +1651,21 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         BOOL wasVisible = [self isVisible];
         BOOL wasOnActiveSpace = [self isOnActiveSpace];
 
+        if (enteringFullScreen || exitingFullScreen)
+        {
+            pendingOrderOut = TRUE;
+            [queue discardEventsMatchingMask:event_mask_for_type(WINDOW_BROUGHT_FORWARD) |
+                                             event_mask_for_type(WINDOW_GOT_FOCUS) |
+                                             event_mask_for_type(WINDOW_LOST_FOCUS) |
+                                             event_mask_for_type(WINDOW_MAXIMIZE_REQUESTED) |
+                                             event_mask_for_type(WINDOW_MINIMIZE_REQUESTED) |
+                                             event_mask_for_type(WINDOW_RESTORE_REQUESTED)
+                                   forWindow:self];
+            return;
+        }
+
+        pendingOrderOut = FALSE;
+
         if ([self isMiniaturized])
             pendingMinimize = TRUE;
 
@@ -1552,7 +1674,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
             [parent grabDockIconSnapshotFromWindow:self force:NO];
 
         [self becameIneligibleParentOrChild];
-        if ([self isMiniaturized])
+        if ([self isMiniaturized] || [self styleMask] & NSFullScreenWindowMask)
         {
             fakingClose = TRUE;
             [self close];
@@ -1718,6 +1840,7 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
             [latentParentWindow removeChildWineWindow:self];
             if ([parent addChildWineWindow:self])
                 [[WineApplicationController sharedController] adjustWindowLevels];
+            [self adjustFullScreenBehavior:[self collectionBehavior]];
         }
     }
 
@@ -2240,9 +2363,10 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
 
                     if (draggingPhase == 2)
                     {
-                        macdrv_event* event = macdrv_create_event(WINDOW_DRAG_BEGIN, self);
-                        [queue postEvent:event];
-                        macdrv_release_event(event);
+                        macdrv_event* mevent = macdrv_create_event(WINDOW_DRAG_BEGIN, self);
+                        mevent->window_drag_begin.no_activate = [event wine_commandKeyDown];
+                        [queue postEvent:mevent];
+                        macdrv_release_event(mevent);
 
                         draggingPhase = 3;
                     }
@@ -2601,6 +2725,8 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
     {
         enteringFullScreen = FALSE;
         enteredFullScreenTime = [[NSProcessInfo processInfo] systemUptime];
+        if (pendingOrderOut)
+            [self doOrderOut];
     }
 
     - (void) windowDidExitFullScreen:(NSNotification*)notification
@@ -2608,18 +2734,24 @@ static CVReturn WineDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTi
         exitingFullScreen = FALSE;
         [self setFrameAndWineFrame:nonFullscreenFrame];
         [self windowDidResize:nil];
+        if (pendingOrderOut)
+            [self doOrderOut];
     }
 
     - (void) windowDidFailToEnterFullScreen:(NSWindow*)window
     {
         enteringFullScreen = FALSE;
         enteredFullScreenTime = 0;
+        if (pendingOrderOut)
+            [self doOrderOut];
     }
 
     - (void) windowDidFailToExitFullScreen:(NSWindow*)window
     {
         exitingFullScreen = FALSE;
         [self windowDidResize:nil];
+        if (pendingOrderOut)
+            [self doOrderOut];
     }
 
     - (void)windowDidMiniaturize:(NSNotification *)notification

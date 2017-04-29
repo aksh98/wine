@@ -33,13 +33,13 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
-typedef struct {
+struct HTMLAreaElement {
     HTMLElement element;
 
     IHTMLAreaElement IHTMLAreaElement_iface;
 
     nsIDOMHTMLAreaElement *nsarea;
-} HTMLAreaElement;
+};
 
 static inline HTMLAreaElement *impl_from_IHTMLAreaElement(IHTMLAreaElement *iface)
 {
@@ -435,6 +435,7 @@ fallback:
 }
 
 static const NodeImplVtbl HTMLAreaElementImplVtbl = {
+    &CLSID_HTMLAreaElement,
     HTMLAreaElement_QI,
     HTMLElement_destructor,
     HTMLElement_cpc,

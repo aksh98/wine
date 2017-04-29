@@ -83,6 +83,8 @@ MAKE_FUNCPTR(gnutls_transport_set_push_function);
 #define GNUTLS_CIPHER_AES_128_GCM 93
 #define GNUTLS_CIPHER_AES_256_GCM 94
 
+#define GNUTLS_MAC_AEAD 200
+
 #define GNUTLS_KX_ANON_ECDH     11
 #define GNUTLS_KX_ECDHE_RSA     12
 #define GNUTLS_KX_ECDHE_ECDSA   13
@@ -292,7 +294,7 @@ static DWORD schannel_get_protocol(gnutls_protocol_t proto)
     }
 }
 
-static ALG_ID schannel_get_cipher_algid(int cipher)
+static ALG_ID schannel_get_cipher_algid(gnutls_cipher_algorithm_t cipher)
 {
     switch (cipher)
     {
@@ -300,8 +302,8 @@ static ALG_ID schannel_get_cipher_algid(int cipher)
     case GNUTLS_CIPHER_NULL: return 0;
     case GNUTLS_CIPHER_ARCFOUR_40:
     case GNUTLS_CIPHER_ARCFOUR_128: return CALG_RC4;
-    case GNUTLS_CIPHER_DES_CBC:
-    case GNUTLS_CIPHER_3DES_CBC: return CALG_DES;
+    case GNUTLS_CIPHER_DES_CBC: return CALG_DES;
+    case GNUTLS_CIPHER_3DES_CBC: return CALG_3DES;
     case GNUTLS_CIPHER_AES_128_CBC:
     case GNUTLS_CIPHER_AES_128_GCM: return CALG_AES_128;
     case GNUTLS_CIPHER_AES_192_CBC: return CALG_AES_192;
@@ -314,7 +316,7 @@ static ALG_ID schannel_get_cipher_algid(int cipher)
     }
 }
 
-static ALG_ID schannel_get_mac_algid(gnutls_mac_algorithm_t mac)
+static ALG_ID schannel_get_mac_algid(gnutls_mac_algorithm_t mac, gnutls_cipher_algorithm_t cipher)
 {
     switch (mac)
     {
@@ -326,8 +328,19 @@ static ALG_ID schannel_get_mac_algid(gnutls_mac_algorithm_t mac)
     case GNUTLS_MAC_SHA256: return CALG_SHA_256;
     case GNUTLS_MAC_SHA384: return CALG_SHA_384;
     case GNUTLS_MAC_SHA512: return CALG_SHA_512;
+    case GNUTLS_MAC_AEAD:
+        /* When using AEAD (such as GCM), we return PRF algorithm instead
+           which is defined in RFC 5289. */
+        switch (cipher)
+        {
+        case GNUTLS_CIPHER_AES_128_GCM: return CALG_SHA_256;
+        case GNUTLS_CIPHER_AES_256_GCM: return CALG_SHA_384;
+        default:
+            break;
+        }
+        /* fall through */
     default:
-        FIXME("unknown algorithm %d\n", mac);
+        FIXME("unknown algorithm %d, cipher %d\n", mac, cipher);
         return 0;
     }
 }
@@ -343,10 +356,9 @@ static ALG_ID schannel_get_kx_algid(int kx)
     case GNUTLS_KX_DHE_DSS:
     case GNUTLS_KX_DHE_RSA: return CALG_DH_EPHEM;
     case GNUTLS_KX_ANON_ECDH: return CALG_ECDH;
-    /* MSDN mentions CALG_ECDH_EPHEM, but doesn't appear in the Windows SDK. */
     case GNUTLS_KX_ECDHE_RSA:
-    case GNUTLS_KX_ECDHE_PSK: return CALG_ECDH;
-    case GNUTLS_KX_ECDHE_ECDSA: return CALG_ECDSA;
+    case GNUTLS_KX_ECDHE_PSK:
+    case GNUTLS_KX_ECDHE_ECDSA: return CALG_ECDH_EPHEM;
     default:
         FIXME("unknown algorithm %d\n", kx);
         return 0;
@@ -376,12 +388,33 @@ SECURITY_STATUS schan_imp_get_connection_info(schan_imp_session session,
     info->dwProtocol = schannel_get_protocol(proto);
     info->aiCipher = schannel_get_cipher_algid(alg);
     info->dwCipherStrength = pgnutls_cipher_get_key_size(alg) * 8;
-    info->aiHash = schannel_get_mac_algid(mac);
+    info->aiHash = schannel_get_mac_algid(mac, alg);
     info->dwHashStrength = pgnutls_mac_get_key_size(mac) * 8;
     info->aiExch = schannel_get_kx_algid(kx);
     /* FIXME: info->dwExchStrength? */
     info->dwExchStrength = 0;
     return SEC_E_OK;
+}
+
+ALG_ID schan_imp_get_key_signature_algorithm(schan_imp_session session)
+{
+    gnutls_session_t s = (gnutls_session_t)session;
+    gnutls_kx_algorithm_t kx = pgnutls_kx_get(s);
+
+    TRACE("(%p)\n", session);
+
+    switch (kx)
+    {
+    case GNUTLS_KX_UNKNOWN: return 0;
+    case GNUTLS_KX_RSA:
+    case GNUTLS_KX_RSA_EXPORT:
+    case GNUTLS_KX_DHE_RSA:
+    case GNUTLS_KX_ECDHE_RSA: return CALG_RSA_SIGN;
+    case GNUTLS_KX_ECDHE_ECDSA: return CALG_ECDSA;
+    default:
+        FIXME("unknown algorithm %d\n", kx);
+        return 0;
+    }
 }
 
 SECURITY_STATUS schan_imp_get_session_peer_certificate(schan_imp_session session, HCERTSTORE store,

@@ -4909,7 +4909,6 @@ GpStatus gdip_format_string(HDC hdc,
     INT hotkeyprefix_count=0;
     INT hotkeyprefix_pos=0, hotkeyprefix_end_pos=0;
     BOOL seen_prefix = FALSE;
-    GpStringFormat *dyn_format=NULL;
 
     if(length == -1) length = lstrlenW(string);
 
@@ -4917,15 +4916,7 @@ GpStatus gdip_format_string(HDC hdc,
     if(!stringdup) return OutOfMemory;
 
     if (!format)
-    {
-        stat = GdipStringFormatGetGenericDefault(&dyn_format);
-        if (stat != Ok)
-        {
-            heap_free(stringdup);
-            return stat;
-        }
-        format = dyn_format;
-    }
+        format = &default_drawstring_format;
 
     nwidth = rect->Width;
     nheight = rect->Height;
@@ -5075,7 +5066,6 @@ GpStatus gdip_format_string(HDC hdc,
 
     heap_free(stringdup);
     heap_free(hotkeyprefix_offsets);
-    GdipDeleteStringFormat(dyn_format);
 
     return stat;
 }
@@ -5427,19 +5417,19 @@ GpStatus WINGDIPAPI GdipDrawString(GpGraphics *graphics, GDIPCONST WCHAR *string
 
         /* Should be no need to explicitly test for StringAlignmentNear as
          * that is default behavior if no alignment is passed. */
-        if(format->vertalign != StringAlignmentNear){
+        if(format->line_align != StringAlignmentNear){
             RectF bounds, in_rect = *rect;
             in_rect.Height = 0.0; /* avoid height clipping */
             GdipMeasureString(graphics, string, length, font, &in_rect, format, &bounds, 0, 0);
 
             TRACE("bounds %s\n", debugstr_rectf(&bounds));
 
-            if(format->vertalign == StringAlignmentCenter)
+            if(format->line_align == StringAlignmentCenter)
                 offsety = (rect->Height - bounds.Height) / 2;
-            else if(format->vertalign == StringAlignmentFar)
+            else if(format->line_align == StringAlignmentFar)
                 offsety = (rect->Height - bounds.Height);
         }
-        TRACE("vertical align %d, offsety %f\n", format->vertalign, offsety);
+        TRACE("line align %d, offsety %f\n", format->line_align, offsety);
     }
 
     save_state = SaveDC(hdc);

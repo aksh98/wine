@@ -32,11 +32,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
-typedef struct {
+struct HTMLGenericElement {
     HTMLElement element;
 
     IHTMLGenericElement IHTMLGenericElement_iface;
-} HTMLGenericElement;
+};
 
 static inline HTMLGenericElement *impl_from_IHTMLGenericElement(IHTMLGenericElement *iface)
 {
@@ -152,6 +152,7 @@ static void HTMLGenericElement_destructor(HTMLDOMNode *iface)
 }
 
 static const NodeImplVtbl HTMLGenericElementImplVtbl = {
+    &CLSID_HTMLGenericElement,
     HTMLGenericElement_QI,
     HTMLGenericElement_destructor,
     HTMLElement_cpc,

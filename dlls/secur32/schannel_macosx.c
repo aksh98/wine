@@ -142,6 +142,45 @@ enum {
 };
 #endif
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED < 1090
+/* Defined in <Security/CipherSuite.h> in the 10.9 SDK or later. */
+enum {
+    TLS_PSK_WITH_RC4_128_SHA                  = 0x008A,
+    TLS_PSK_WITH_3DES_EDE_CBC_SHA             = 0x008B,
+    TLS_PSK_WITH_AES_128_CBC_SHA              = 0x008C,
+    TLS_PSK_WITH_AES_256_CBC_SHA              = 0x008D,
+    TLS_DHE_PSK_WITH_RC4_128_SHA              = 0x008E,
+    TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA         = 0x008F,
+    TLS_DHE_PSK_WITH_AES_128_CBC_SHA          = 0x0090,
+    TLS_DHE_PSK_WITH_AES_256_CBC_SHA          = 0x0091,
+    TLS_RSA_PSK_WITH_RC4_128_SHA              = 0x0092,
+    TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA         = 0x0093,
+    TLS_RSA_PSK_WITH_AES_128_CBC_SHA          = 0x0094,
+    TLS_RSA_PSK_WITH_AES_256_CBC_SHA          = 0x0095,
+    TLS_PSK_WITH_NULL_SHA                     = 0x002C,
+    TLS_DHE_PSK_WITH_NULL_SHA                 = 0x002D,
+    TLS_RSA_PSK_WITH_NULL_SHA                 = 0x002E,
+    TLS_PSK_WITH_AES_128_GCM_SHA256           = 0x00A8,
+    TLS_PSK_WITH_AES_256_GCM_SHA384           = 0x00A9,
+    TLS_DHE_PSK_WITH_AES_128_GCM_SHA256       = 0x00AA,
+    TLS_DHE_PSK_WITH_AES_256_GCM_SHA384       = 0x00AB,
+    TLS_RSA_PSK_WITH_AES_128_GCM_SHA256       = 0x00AC,
+    TLS_RSA_PSK_WITH_AES_256_GCM_SHA384       = 0x00AD,
+    TLS_PSK_WITH_AES_128_CBC_SHA256           = 0x00AE,
+    TLS_PSK_WITH_AES_256_CBC_SHA384           = 0x00AF,
+    TLS_PSK_WITH_NULL_SHA256                  = 0x00B0,
+    TLS_PSK_WITH_NULL_SHA384                  = 0x00B1,
+    TLS_DHE_PSK_WITH_AES_128_CBC_SHA256       = 0x00B2,
+    TLS_DHE_PSK_WITH_AES_256_CBC_SHA384       = 0x00B3,
+    TLS_DHE_PSK_WITH_NULL_SHA256              = 0x00B4,
+    TLS_DHE_PSK_WITH_NULL_SHA384              = 0x00B5,
+    TLS_RSA_PSK_WITH_AES_128_CBC_SHA256       = 0x00B6,
+    TLS_RSA_PSK_WITH_AES_256_CBC_SHA384       = 0x00B7,
+    TLS_RSA_PSK_WITH_NULL_SHA256              = 0x00B8,
+    TLS_RSA_PSK_WITH_NULL_SHA384              = 0x00B9,
+};
+#endif
+
 
 struct mac_session {
     SSLContextRef context;
@@ -163,6 +202,7 @@ enum {
     schan_kx_DH_RSA,
     schan_kx_DHE_DSS_EXPORT,
     schan_kx_DHE_DSS,
+    schan_kx_DHE_PSK,
     schan_kx_DHE_RSA_EXPORT,
     schan_kx_DHE_RSA,
     schan_kx_ECDH_anon,
@@ -172,7 +212,9 @@ enum {
     schan_kx_ECDHE_RSA,
     schan_kx_FORTEZZA_DMS,
     schan_kx_NULL,
+    schan_kx_PSK,
     schan_kx_RSA_EXPORT,
+    schan_kx_RSA_PSK,
     schan_kx_RSA,
 };
 
@@ -309,6 +351,23 @@ static const struct cipher_suite cipher_suites[] = {
     CIPHER_SUITE(TLS, DH_anon, 3DES_EDE_CBC, SHA),
     CIPHER_SUITE(TLS, DH_anon, AES_128_CBC, SHA256),
     CIPHER_SUITE(TLS, DH_anon, AES_256_CBC, SHA256),
+
+    CIPHER_SUITE(TLS, PSK, RC4_128, SHA),
+    CIPHER_SUITE(TLS, PSK, 3DES_EDE_CBC, SHA),
+    CIPHER_SUITE(TLS, PSK, AES_128_CBC, SHA),
+    CIPHER_SUITE(TLS, PSK, AES_256_CBC, SHA),
+    CIPHER_SUITE(TLS, DHE_PSK, RC4_128, SHA),
+    CIPHER_SUITE(TLS, DHE_PSK, 3DES_EDE_CBC, SHA),
+    CIPHER_SUITE(TLS, DHE_PSK, AES_128_CBC, SHA),
+    CIPHER_SUITE(TLS, DHE_PSK, AES_256_CBC, SHA),
+    CIPHER_SUITE(TLS, RSA_PSK, RC4_128, SHA),
+    CIPHER_SUITE(TLS, RSA_PSK, 3DES_EDE_CBC, SHA),
+    CIPHER_SUITE(TLS, RSA_PSK, AES_128_CBC, SHA),
+    CIPHER_SUITE(TLS, RSA_PSK, AES_256_CBC, SHA),
+    CIPHER_SUITE(TLS, PSK, NULL, SHA),
+    CIPHER_SUITE(TLS, DHE_PSK, NULL, SHA),
+    CIPHER_SUITE(TLS, RSA_PSK, NULL, SHA),
+
     CIPHER_SUITE(TLS, RSA, AES_128_GCM, SHA256),
     CIPHER_SUITE(TLS, RSA, AES_256_GCM, SHA384),
     CIPHER_SUITE(TLS, DHE_RSA, AES_128_GCM, SHA256),
@@ -321,6 +380,26 @@ static const struct cipher_suite cipher_suites[] = {
     CIPHER_SUITE(TLS, DH_DSS, AES_256_GCM, SHA384),
     CIPHER_SUITE(TLS, DH_anon, AES_128_GCM, SHA256),
     CIPHER_SUITE(TLS, DH_anon, AES_256_GCM, SHA384),
+
+    CIPHER_SUITE(TLS, PSK, AES_128_GCM, SHA256),
+    CIPHER_SUITE(TLS, PSK, AES_256_GCM, SHA384),
+    CIPHER_SUITE(TLS, DHE_PSK, AES_128_GCM, SHA256),
+    CIPHER_SUITE(TLS, DHE_PSK, AES_256_GCM, SHA384),
+    CIPHER_SUITE(TLS, RSA_PSK, AES_128_GCM, SHA256),
+    CIPHER_SUITE(TLS, RSA_PSK, AES_256_GCM, SHA384),
+    CIPHER_SUITE(TLS, PSK, AES_128_CBC, SHA256),
+    CIPHER_SUITE(TLS, PSK, AES_256_CBC, SHA384),
+    CIPHER_SUITE(TLS, PSK, NULL, SHA256),
+    CIPHER_SUITE(TLS, PSK, NULL, SHA384),
+    CIPHER_SUITE(TLS, DHE_PSK, AES_128_CBC, SHA256),
+    CIPHER_SUITE(TLS, DHE_PSK, AES_256_CBC, SHA384),
+    CIPHER_SUITE(TLS, DHE_PSK, NULL, SHA256),
+    CIPHER_SUITE(TLS, DHE_PSK, NULL, SHA384),
+    CIPHER_SUITE(TLS, RSA_PSK, AES_128_CBC, SHA256),
+    CIPHER_SUITE(TLS, RSA_PSK, AES_256_CBC, SHA384),
+    CIPHER_SUITE(TLS, RSA_PSK, NULL, SHA256),
+    CIPHER_SUITE(TLS, RSA_PSK, NULL, SHA384),
+
     CIPHER_SUITE(TLS, ECDHE_ECDSA, AES_128_CBC, SHA256),
     CIPHER_SUITE(TLS, ECDHE_ECDSA, AES_256_CBC, SHA384),
     CIPHER_SUITE(TLS, ECDH_ECDSA, AES_128_CBC, SHA256),
@@ -492,16 +571,18 @@ static ALG_ID schan_get_kx_algid(const struct cipher_suite* c)
     {
     case schan_kx_DHE_DSS_EXPORT:
     case schan_kx_DHE_DSS:
+    case schan_kx_DHE_PSK:
     case schan_kx_DHE_RSA_EXPORT:
     case schan_kx_DHE_RSA:          return CALG_DH_EPHEM;
     case schan_kx_ECDH_anon:
     case schan_kx_ECDH_ECDSA:
-    case schan_kx_ECDH_RSA:
+    case schan_kx_ECDH_RSA:         return CALG_ECDH;
     case schan_kx_ECDHE_ECDSA:
-    case schan_kx_ECDHE_RSA:        return CALG_ECDH;
+    case schan_kx_ECDHE_RSA:        return CALG_ECDH_EPHEM;
     case schan_kx_NULL:             return 0;
     case schan_kx_RSA:
-    case schan_kx_RSA_EXPORT:       return CALG_RSA_KEYX;
+    case schan_kx_RSA_EXPORT:
+    case schan_kx_RSA_PSK:          return CALG_RSA_KEYX;
 
     case schan_kx_DH_anon_EXPORT:
     case schan_kx_DH_anon:
@@ -510,6 +591,7 @@ static ALG_ID schan_get_kx_algid(const struct cipher_suite* c)
     case schan_kx_DH_RSA_EXPORT:
     case schan_kx_DH_RSA:
     case schan_kx_FORTEZZA_DMS:
+    case schan_kx_PSK:
         FIXME("Don't know CALG for key exchange algorithm %d for cipher suite %#x, returning 0\n", c->kx_alg, (unsigned)c->suite);
         return 0;
 
@@ -830,6 +912,68 @@ unsigned int schan_imp_get_max_message_size(schan_imp_session session)
 {
     FIXME("Returning 1 << 14.\n");
     return 1 << 14;
+}
+
+ALG_ID schan_imp_get_key_signature_algorithm(schan_imp_session session)
+{
+    struct mac_session* s = (struct mac_session*)session;
+    SSLCipherSuite cipherSuite;
+    const struct cipher_suite* c;
+    int status;
+
+    TRACE("(%p/%p)\n", s, s->context);
+
+    status = SSLGetNegotiatedCipher(s->context, &cipherSuite);
+    if (status != noErr)
+    {
+        ERR("Failed to get session cipher suite: %d\n", status);
+        return 0;
+    }
+
+    c = get_cipher_suite(cipherSuite);
+    if (!c)
+    {
+        ERR("Unknown session cipher suite: %#x\n", (unsigned int)cipherSuite);
+        return 0;
+    }
+
+    switch (c->kx_alg)
+    {
+    case schan_kx_DH_DSS_EXPORT:
+    case schan_kx_DH_DSS:
+    case schan_kx_DHE_DSS_EXPORT:
+    case schan_kx_DHE_DSS:
+        return CALG_DSS_SIGN;
+
+    case schan_kx_DH_RSA_EXPORT:
+    case schan_kx_DH_RSA:
+    case schan_kx_DHE_RSA_EXPORT:
+    case schan_kx_DHE_RSA:
+    case schan_kx_ECDH_RSA:
+    case schan_kx_ECDHE_RSA:
+    case schan_kx_RSA_EXPORT:
+    case schan_kx_RSA:
+        return CALG_RSA_SIGN;
+
+    case schan_kx_ECDH_ECDSA:
+    case schan_kx_ECDHE_ECDSA:
+        return CALG_ECDSA;
+
+    case schan_kx_DH_anon_EXPORT:
+    case schan_kx_DH_anon:
+    case schan_kx_DHE_PSK:
+    case schan_kx_ECDH_anon:
+    case schan_kx_FORTEZZA_DMS:
+    case schan_kx_NULL:
+    case schan_kx_PSK:
+    case schan_kx_RSA_PSK:
+        FIXME("Don't know key signature algorithm for key exchange algorithm %d, returning 0\n", c->kx_alg);
+        return 0;
+
+    default:
+        FIXME("Unknown key exchange algorithm %d for cipher suite %#x, returning 0\n", c->kx_alg, (unsigned int)c->suite);
+        return 0;
+    }
 }
 
 SECURITY_STATUS schan_imp_get_connection_info(schan_imp_session session,

@@ -513,18 +513,27 @@ static HRESULT WINAPI IDirectMusicLoaderImpl_SetObject(IDirectMusicLoader8 *ifac
 	return S_OK;
 }
 
-static HRESULT WINAPI IDirectMusicLoaderImpl_SetSearchDirectory(IDirectMusicLoader8 *iface, REFGUID rguidClass, WCHAR *pwzPath, BOOL fClear)
+static HRESULT WINAPI IDirectMusicLoaderImpl_SetSearchDirectory(IDirectMusicLoader8 *iface,
+        REFGUID class, WCHAR *path, BOOL clear)
 {
-	IDirectMusicLoaderImpl *This = impl_from_IDirectMusicLoader8(iface);
-	WCHAR wszCurrentPath[MAX_PATH];
-	TRACE("(%p, %s, %s, %d)\n", This, debugstr_dmguid(rguidClass), debugstr_w(pwzPath), fClear);
-	FIXME(": fClear ignored\n");
-	DMUSIC_GetLoaderSettings (iface, rguidClass, wszCurrentPath, NULL);
-	if (!strncmpW(wszCurrentPath, pwzPath, MAX_PATH)) {
-	  return S_FALSE;
-	}
-	/* FIXME: check if path is valid; else return DMUS_E_LOADER_BADPATH */
-	return DMUSIC_SetLoaderSettings (iface, rguidClass, pwzPath, NULL);
+    IDirectMusicLoaderImpl *This = impl_from_IDirectMusicLoader8(iface);
+    WCHAR current_path[MAX_PATH];
+    DWORD attr;
+
+    TRACE("(%p, %s, %s, %d)\n", This, debugstr_dmguid(class), debugstr_w(path), clear);
+
+    attr = GetFileAttributesW(path);
+    if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY))
+        return DMUS_E_LOADER_BADPATH;
+
+    if (clear)
+        FIXME("clear flag ignored\n");
+
+    DMUSIC_GetLoaderSettings(iface, class, current_path, NULL);
+    if (!strncmpW(current_path, path, MAX_PATH))
+        return S_FALSE;
+
+    return DMUSIC_SetLoaderSettings(iface, class, path, NULL);
 }
 
 static HRESULT WINAPI IDirectMusicLoaderImpl_ScanDirectory(IDirectMusicLoader8 *iface, REFGUID rguidClass, WCHAR *pwzFileExtension, WCHAR *pwzScanFileName)
@@ -536,12 +545,16 @@ static HRESULT WINAPI IDirectMusicLoaderImpl_ScanDirectory(IDirectMusicLoader8 *
 	WCHAR wszSearchString[MAX_PATH];
 	WCHAR *p;
 	HRESULT result;
-	TRACE("(%p, %s, %p, %p)\n", This, debugstr_dmguid(rguidClass), pwzFileExtension, pwzScanFileName);
+        TRACE("(%p, %s, %s, %s)\n", This, debugstr_dmguid(rguidClass), debugstr_w(pwzFileExtension),
+                        debugstr_w(pwzScanFileName));
 	if (IsEqualGUID (rguidClass, &GUID_DirectMusicAllTypes) || !DMUSIC_IsValidLoadableClass(rguidClass)) {
 		ERR(": rguidClass invalid CLSID\n");
 		return REGDB_E_CLASSNOTREG;
 	}
-	
+
+        if (!pwzFileExtension)
+                return S_FALSE;
+
 	/* get search path for given class */
 	DMUSIC_GetLoaderSettings (iface, rguidClass, wszSearchString, NULL);
 	

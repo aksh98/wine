@@ -3183,9 +3183,10 @@ static void update_reg_entries(void)
 static void delete_external_font_keys(void)
 {
     HKEY winnt_key = 0, win9x_key = 0, external_key = 0;
-    DWORD dlen, vlen, datalen, valuelen, i, type;
+    DWORD dlen, plen, vlen, datalen, valuelen, i, type, path_type;
     LPWSTR valueW;
     LPVOID data;
+    BYTE *path;
 
     if(RegCreateKeyExW(HKEY_LOCAL_MACHINE, winnt_font_reg_key,
                        0, NULL, 0, KEY_ALL_ACCESS, NULL, &winnt_key, NULL) != ERROR_SUCCESS) {
@@ -3210,20 +3211,29 @@ static void delete_external_font_keys(void)
                      &valuelen, &datalen, NULL, NULL);
     valuelen++; /* returned value doesn't include room for '\0' */
     valueW = HeapAlloc(GetProcessHeap(), 0, valuelen * sizeof(WCHAR));
-    data = HeapAlloc(GetProcessHeap(), 0, datalen * sizeof(WCHAR));
+    data = HeapAlloc(GetProcessHeap(), 0, datalen);
+    path = HeapAlloc(GetProcessHeap(), 0, datalen);
 
-    dlen = datalen * sizeof(WCHAR);
+    dlen = datalen;
     vlen = valuelen;
     i = 0;
     while(RegEnumValueW(external_key, i++, valueW, &vlen, NULL, &type, data,
                         &dlen) == ERROR_SUCCESS) {
+        plen = dlen;
+        if (RegQueryValueExW(winnt_key, valueW, 0, &path_type, path, &plen) == ERROR_SUCCESS &&
+            type == path_type && dlen == plen && !memcmp(data, path, plen))
+            RegDeleteValueW(winnt_key, valueW);
 
-        RegDeleteValueW(winnt_key, valueW);
-        RegDeleteValueW(win9x_key, valueW);
+        plen = dlen;
+        if (RegQueryValueExW(win9x_key, valueW, 0, &path_type, path, &plen) == ERROR_SUCCESS &&
+            type == path_type && dlen == plen && !memcmp(data, path, plen))
+            RegDeleteValueW(win9x_key, valueW);
+
         /* reset dlen and vlen */
         dlen = datalen;
         vlen = valuelen;
     }
+    HeapFree(GetProcessHeap(), 0, path);
     HeapFree(GetProcessHeap(), 0, data);
     HeapFree(GetProcessHeap(), 0, valueW);
 
@@ -3983,16 +3993,11 @@ static void update_font_info(void)
     DWORD len, type;
     HKEY hkey = 0;
     UINT i, ansi_cp = 0, oem_cp = 0;
-    DWORD screen_dpi = 96, font_dpi = 0;
+    DWORD screen_dpi, font_dpi = 0;
     BOOL done = FALSE;
 
-    if (RegOpenKeyA(HKEY_LOCAL_MACHINE,
-                    "System\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts",
-                    &hkey) == ERROR_SUCCESS)
-    {
-        reg_load_dword(hkey, logpixels, &screen_dpi);
-        RegCloseKey(hkey);
-    }
+    screen_dpi = get_dpi();
+    if (!screen_dpi) screen_dpi = 96;
 
     if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Wine\\Fonts", 0, NULL, 0, KEY_ALL_ACCESS, NULL, &hkey, NULL) != ERROR_SUCCESS)
         return;
@@ -8389,7 +8394,10 @@ static DWORD get_font_unicode_ranges(FT_Face face, GLYPHSET *gs)
         }
     }
     else
-        FIXME("encoding %u not supported\n", face->charmap->encoding);
+    {
+        DWORD encoding = RtlUlongByteSwap(face->charmap->encoding);
+        FIXME("encoding %s not supported\n", debugstr_an((char *)&encoding, 4));
+    }
 
     return num_ranges;
 }
@@ -8701,9 +8709,10 @@ static DWORD freetype_GetKerningPairs( PHYSDEV dev, DWORD cPairs, KERNINGPAIR *k
     }
     else
     {
+        DWORD encoding = RtlUlongByteSwap(font->ft_face->charmap->encoding);
         ULONG n;
 
-        FIXME("encoding %u not supported\n", font->ft_face->charmap->encoding);
+        FIXME("encoding %s not supported\n", debugstr_an((char *)&encoding, 4));
         for (n = 0; n <= 65535; n++)
             glyph_to_char[n] = (USHORT)n;
     }

@@ -665,6 +665,14 @@ MENU_AdjustMenuItemRect(const POPUPMENU *menu, LPRECT rect)
     OffsetRect( rect, menu->items_rect.left, menu->items_rect.top - scroll_offset );
 }
 
+enum hittest
+{
+    ht_nowhere,     /* outside the menu */
+    ht_border,      /* anywhere that's not an item or a scroll arrow */
+    ht_item,        /* a menu item */
+    ht_scroll_up,   /* scroll up arrow */
+    ht_scroll_down  /* scroll down arrow */
+};
 
 /***********************************************************************
  *           MENU_FindItemByCoords
@@ -672,30 +680,61 @@ MENU_AdjustMenuItemRect(const POPUPMENU *menu, LPRECT rect)
  * Find the item at the specified coordinates (screen coords). Does
  * not work for child windows and therefore should not be called for
  * an arbitrary system menu.
+ *
+ * Returns a hittest code.  *pos will contain the position of the
+ * item or NO_SELECTED_ITEM.  If the hittest code is ht_scroll_up
+ * or ht_scroll_down then *pos will contain the position of the
+ * item that's just outside the items_rect - ie, the one that would
+ * be scrolled completely into view.
  */
-static MENUITEM *MENU_FindItemByCoords( const POPUPMENU *menu,
-					POINT pt, UINT *pos )
+static enum hittest MENU_FindItemByCoords( const POPUPMENU *menu, POINT pt, UINT *pos )
 {
     MENUITEM *item;
     UINT i;
     RECT rect;
+    enum hittest ht = ht_border;
 
-    if (!GetWindowRect(menu->hWnd, &rect)) return NULL;
+    *pos = NO_SELECTED_ITEM;
+
+    if (!GetWindowRect(menu->hWnd, &rect) || !PtInRect(&rect, pt))
+        return ht_nowhere;
+
     if (GetWindowLongW( menu->hWnd, GWL_EXSTYLE ) & WS_EX_LAYOUTRTL) pt.x = rect.right - 1 - pt.x;
     else pt.x -= rect.left;
     pt.y -= rect.top;
+
+    if (!PtInRect(&menu->items_rect, pt))
+    {
+        if (!menu->bScrolling || pt.x < menu->items_rect.left || pt.x >= menu->items_rect.right)
+            return ht_border;
+
+        /* On a scroll arrow.  Update pt so that it points to the item just outside items_rect */
+        if (pt.y < menu->items_rect.top)
+        {
+            ht = ht_scroll_up;
+            pt.y = menu->items_rect.top - 1;
+        }
+        else
+        {
+            ht = ht_scroll_down;
+            pt.y = menu->items_rect.bottom;
+        }
+    }
+
     item = menu->items;
     for (i = 0; i < menu->nItems; i++, item++)
     {
         rect = item->rect;
         MENU_AdjustMenuItemRect(menu, &rect);
-	if (PtInRect(&rect, pt))
-	{
-	    if (pos) *pos = i;
-	    return item;
-	}
+        if (PtInRect(&rect, pt))
+        {
+            *pos = i;
+            if (ht != ht_scroll_up && ht != ht_scroll_down) ht = ht_item;
+            break;
+        }
     }
-    return NULL;
+
+    return ht;
 }
 
 
@@ -815,7 +854,7 @@ static void MENU_GetBitmapItemSize( MENUITEM *lpitem, SIZE *size,
  * Draw a bitmap item.
  */
 static void MENU_DrawBitmapItem( HDC hdc, MENUITEM *lpitem, const RECT *rect,
-                    HMENU hmenu, HWND hwndOwner, UINT odaction, BOOL menuBar)
+                                 POPUPMENU *menu, HWND hwndOwner, UINT odaction )
 {
     BITMAP bm;
     DWORD rop;
@@ -882,7 +921,7 @@ static void MENU_DrawBitmapItem( HDC hdc, MENUITEM *lpitem, const RECT *rect,
                 drawItem.itemState |= (lpitem->fState & MF_DISABLED)?ODS_DISABLED:0;
                 drawItem.itemState |= (lpitem->fState & MF_GRAYED)?ODS_GRAYED|ODS_DISABLED:0;
                 drawItem.itemState |= (lpitem->fState & MF_HILITE)?ODS_SELECTED:0;
-                drawItem.hwndItem = (HWND)hmenu;
+                drawItem.hwndItem = (HWND)menu->obj.handle;
                 drawItem.hDC = hdc;
                 drawItem.itemData = lpitem->dwItemData;
                 drawItem.rcItem = *rect;
@@ -1097,31 +1136,18 @@ static void MENU_CalcItemSize( HDC hdc, MENUITEM *lpitem, HWND hwndOwner,
     TRACE("%s\n", wine_dbgstr_rect( &lpitem->rect));
 }
 
-
-/***********************************************************************
- *           MENU_GetMaxPopupHeight
- */
-static UINT
-MENU_GetMaxPopupHeight(const POPUPMENU *lppop)
-{
-    if (lppop->cyMax)
-        return lppop->cyMax;
-    return GetSystemMetrics(SM_CYSCREEN) - GetSystemMetrics(SM_CYBORDER);
-}
-
-
 /***********************************************************************
  *           MENU_PopupMenuCalcSize
  *
  * Calculate the size of a popup menu.
  */
-static void MENU_PopupMenuCalcSize( LPPOPUPMENU lppop )
+static void MENU_PopupMenuCalcSize( LPPOPUPMENU lppop, UINT max_height )
 {
     MENUITEM *lpitem;
     HDC hdc;
     UINT start, i;
-    BOOL textandbmp = FALSE;
-    int orgX, orgY, maxTab, maxTabWidth, maxHeight;
+    BOOL textandbmp = FALSE, multi_col = FALSE;
+    int orgX, orgY, maxTab, maxTabWidth;
 
     lppop->Width = lppop->Height = 0;
     SetRectEmpty(&lppop->items_rect);
@@ -1147,8 +1173,11 @@ static void MENU_PopupMenuCalcSize( LPPOPUPMENU lppop )
 	  /* Parse items until column break or end of menu */
 	for (i = start; i < lppop->nItems; i++, lpitem++)
 	{
-	    if ((i != start) &&
-		(lpitem->fType & (MF_MENUBREAK | MF_MENUBARBREAK))) break;
+            if (lpitem->fType & (MF_MENUBREAK | MF_MENUBARBREAK))
+            {
+                multi_col = TRUE;
+                if (i != start) break;
+            }
 
 	    MENU_CalcItemSize( hdc, lpitem, lppop->hwndOwner, orgX, orgY, FALSE, lppop );
 	    lppop->items_rect.right = max( lppop->items_rect.right, lpitem->rect.right );
@@ -1188,14 +1217,16 @@ static void MENU_PopupMenuCalcSize( LPPOPUPMENU lppop )
     lppop->Width = lppop->items_rect.right + MENU_MARGIN;
 
     /* Adjust popup height if it exceeds maximum */
-    maxHeight = MENU_GetMaxPopupHeight(lppop);
-    if (lppop->Height >= maxHeight)
+    if (lppop->Height >= max_height)
     {
-        lppop->Height = maxHeight;
+        lppop->Height = max_height;
+        lppop->bScrolling = !multi_col;
         /* When the scroll arrows are present, don't add the top/bottom margin as well */
-        lppop->items_rect.top += get_scroll_arrow_height(lppop) - MENU_MARGIN;
-        lppop->items_rect.bottom = lppop->Height - get_scroll_arrow_height(lppop);
-        lppop->bScrolling = TRUE;
+        if (lppop->bScrolling)
+        {
+            lppop->items_rect.top = get_scroll_arrow_height(lppop);
+            lppop->items_rect.bottom = lppop->Height - get_scroll_arrow_height(lppop);
+        }
     }
     else
     {
@@ -1361,15 +1392,13 @@ static void draw_popup_arrow( HDC hdc, RECT rect, UINT arrow_bitmap_width,
  *
  * Draw a single menu item.
  */
-static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, MENUITEM *lpitem,
-			       UINT height, BOOL menuBar, UINT odaction )
+static void MENU_DrawMenuItem( HWND hwnd, POPUPMENU *menu, HWND hwndOwner, HDC hdc,
+                               MENUITEM *lpitem, BOOL menuBar, UINT odaction )
 {
-    RECT rect;
+    RECT rect, bmprc;
     BOOL flat_menu = FALSE;
     int bkgnd;
     UINT arrow_bitmap_width = 0, arrow_bitmap_height = 0;
-    POPUPMENU *menu = MENU_GetMenu(hmenu);
-    RECT bmprc;
     HRGN old_clip = NULL, clip;
 
     debug_print_menuitem("MENU_DrawMenuItem: ", lpitem, "");
@@ -1387,6 +1416,12 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
 	    NC_DrawSysButton( hwnd, hdc, lpitem->fState & (MF_HILITE | MF_MOUSESELECT) );
 	return;
     }
+
+    TRACE( "rect=%s\n", wine_dbgstr_rect( &lpitem->rect ) );
+    rect = lpitem->rect;
+    MENU_AdjustMenuItemRect( menu, &rect );
+    if (!IntersectRect( &bmprc, &rect, &menu->items_rect )) /* bmprc is used as a dummy */
+        return;
 
     SystemParametersInfoW (SPI_GETFLATMENU, 0, &flat_menu, 0);
     bkgnd = (menuBar && flat_menu) ? COLOR_MENUBAR : COLOR_MENU;
@@ -1414,10 +1449,6 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
 	    SetTextColor( hdc, GetSysColor( COLOR_MENUTEXT ) );
 	SetBkColor( hdc, GetSysColor( bkgnd ) );
     }
-
-    TRACE("rect=%s\n", wine_dbgstr_rect( &lpitem->rect));
-    rect = lpitem->rect;
-    MENU_AdjustMenuItemRect(MENU_GetMenu(hmenu), &rect);
 
     old_clip = CreateRectRgn( 0, 0, 0, 0 );
     if (GetClipRgn( hdc, old_clip ) <= 0)
@@ -1452,7 +1483,7 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
         if (lpitem->fState & MF_GRAYED)  dis.itemState |= ODS_GRAYED|ODS_DISABLED;
         if (lpitem->fState & MF_HILITE)  dis.itemState |= ODS_SELECTED;
         dis.itemAction = odaction; /* ODA_DRAWENTIRE | ODA_SELECT | ODA_FOCUS; */
-        dis.hwndItem   = (HWND)hmenu;
+        dis.hwndItem   = (HWND)menu->obj.handle;
         dis.hDC        = hdc;
         dis.rcItem     = rect;
         TRACE("Ownerdraw: owner=%p itemID=%d, itemState=%d, itemAction=%d, "
@@ -1503,7 +1534,7 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
 
         rc.left -= MENU_COL_SPACE / 2 + 1;
         rc.top = 3;
-        rc.bottom = height - 3;
+        rc.bottom = menu->Height - 3;
         if (flat_menu)
         {
             oldPen = SelectObject( hdc, SYSCOLOR_GetPen(COLOR_BTNSHADOW) );
@@ -1521,8 +1552,7 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
         HPEN oldPen;
         RECT rc = rect;
 
-        rc.left++;
-        rc.right--;
+        InflateRect( &rc, -1, 0 );
         rc.top = ( rc.top + rc.bottom) / 2;
         if (flat_menu)
         {
@@ -1571,7 +1601,6 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
     {
         HBITMAP bm;
         INT y = rect.top + rect.bottom;
-        RECT rc = rect;
         BOOL checked = FALSE;
         UINT check_bitmap_width = GetSystemMetrics( SM_CXMENUCHECK );
         UINT check_bitmap_height = GetSystemMetrics( SM_CYMENUCHECK );
@@ -1580,7 +1609,8 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
          * FIXME:
          * Custom checkmark bitmaps are monochrome but not always 1bpp.
          */
-        if( !(menu->dwStyle & MNS_NOCHECK)) {
+        if (!(menu->dwStyle & MNS_NOCHECK))
+        {
             bm = (lpitem->fState & MF_CHECKED) ? lpitem->hCheckBit :
                 lpitem->hUnCheckBit;
             if (bm)  /* we have a custom bitmap */
@@ -1588,7 +1618,7 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
                 HDC hdcMem = CreateCompatibleDC( hdc );
 
                 SelectObject( hdcMem, bm );
-                BitBlt( hdc, rc.left, (y - check_bitmap_height) / 2,
+                BitBlt( hdc, rect.left, (y - check_bitmap_height) / 2,
                         check_bitmap_width, check_bitmap_height,
                         hdcMem, 0, 0, SRCCOPY );
                 DeleteDC( hdcMem );
@@ -1606,20 +1636,19 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
                 DrawFrameControl( hdcMem, &r, DFC_MENU,
                         (lpitem->fType & MFT_RADIOCHECK) ?
                         DFCS_MENUBULLET : DFCS_MENUCHECK );
-                BitBlt( hdc, rc.left, (y - r.bottom) / 2, r.right, r.bottom,
+                BitBlt( hdc, rect.left, (y - r.bottom) / 2, r.right, r.bottom,
                         hdcMem, 0, 0, SRCCOPY );
                 DeleteDC( hdcMem );
                 DeleteObject( bm );
                 checked = TRUE;
             }
         }
-        if( lpitem->hbmpItem &&
-                !( checked && (menu->dwStyle & MNS_CHECKORBMP))) {
+        if (lpitem->hbmpItem && !(checked && (menu->dwStyle & MNS_CHECKORBMP)))
+        {
             POINT origorg;
             /* some applications make this assumption on the DC's origin */
             SetViewportOrgEx( hdc, rect.left, rect.top, &origorg);
-            MENU_DrawBitmapItem(hdc, lpitem, &bmprc, hmenu, hwndOwner,
-                    odaction, FALSE);
+            MENU_DrawBitmapItem( hdc, lpitem, &bmprc, menu, hwndOwner, odaction );
             SetViewportOrgEx( hdc, origorg.x, origorg.y, NULL);
         }
 	/* Draw the popup-menu arrow */
@@ -1631,13 +1660,12 @@ static void MENU_DrawMenuItem( HWND hwnd, HMENU hmenu, HWND hwndOwner, HDC hdc, 
             rect.left += check_bitmap_width;
 	rect.right -= arrow_bitmap_width;
     }
-    else if( lpitem->hbmpItem)
+    else if (lpitem->hbmpItem)
     {   /* Draw the bitmap */
         POINT origorg;
-        
+
         SetViewportOrgEx( hdc, rect.left, rect.top, &origorg);
-        MENU_DrawBitmapItem( hdc, lpitem, &bmprc, hmenu, hwndOwner,
-                odaction, menuBar);
+        MENU_DrawBitmapItem( hdc, lpitem, &bmprc, menu, hwndOwner, odaction );
         SetViewportOrgEx( hdc, origorg.x, origorg.y, NULL);
     }
     /* process text if present */
@@ -1760,15 +1788,15 @@ static void MENU_DrawPopupMenu( HWND hwnd, HDC hdc, HMENU hmenu )
             {
                 TRACE("hmenu %p Style %08x\n", hmenu, menu->dwStyle);
                 /* draw menu items */
-                if( menu->nItems)
+                if (menu->nItems)
                 {
                     MENUITEM *item;
                     UINT u;
 
                     item = menu->items;
-                    for( u = menu->nItems; u > 0; u--, item++)
-                        MENU_DrawMenuItem( hwnd, hmenu, menu->hwndOwner, hdc,
-                                item, menu->Height, FALSE, ODA_DRAWENTIRE );
+                    for (u = menu->nItems; u > 0; u--, item++)
+                        MENU_DrawMenuItem( hwnd, menu, menu->hwndOwner, hdc,
+                                           item, FALSE, ODA_DRAWENTIRE );
                 }
                 /* draw scroll arrows */
                 if (menu->bScrolling)
@@ -1849,6 +1877,7 @@ static BOOL MENU_ShowPopup( HWND hwndOwner, HMENU hmenu, UINT id, UINT flags,
     POINT pt;
     HMONITOR monitor;
     MONITORINFO info;
+    UINT max_height;
 
     TRACE("owner=%p hmenu=%p id=0x%04x x=0x%04x y=0x%04x xa=0x%04x ya=0x%04x\n",
           hwndOwner, hmenu, id, x, y, xanchor, yanchor);
@@ -1861,9 +1890,6 @@ static BOOL MENU_ShowPopup( HWND hwndOwner, HMENU hmenu, UINT id, UINT flags,
     }
 
     menu->nScrollPos = 0;
-    MENU_PopupMenuCalcSize( menu );
-
-    /* adjust popup menu pos so that it fits within the desktop */
 
     /* FIXME: should use item rect */
     pt.x = x;
@@ -1871,6 +1897,14 @@ static BOOL MENU_ShowPopup( HWND hwndOwner, HMENU hmenu, UINT id, UINT flags,
     monitor = MonitorFromPoint( pt, MONITOR_DEFAULTTONEAREST );
     info.cbSize = sizeof(info);
     GetMonitorInfoW( monitor, &info );
+
+    max_height = info.rcWork.bottom - info.rcWork.top;
+    if (menu->cyMax)
+        max_height = min( max_height, menu->cyMax );
+
+    MENU_PopupMenuCalcSize( menu, max_height );
+
+    /* adjust popup menu pos so that it fits within the desktop */
 
     if (flags & TPM_LAYOUTRTL)
         flags ^= TPM_RIGHTALIGN;
@@ -1987,10 +2021,9 @@ static void MENU_SelectItem( HWND hwndOwner, HMENU hmenu, UINT wIndex,
       /* Clear previous highlighted item */
     if (lppop->FocusedItem != NO_SELECTED_ITEM)
     {
-	lppop->items[lppop->FocusedItem].fState &= ~(MF_HILITE|MF_MOUSESELECT);
-	MENU_DrawMenuItem(lppop->hWnd, hmenu, hwndOwner, hdc,&lppop->items[lppop->FocusedItem],
-                          lppop->Height, !(lppop->wFlags & MF_POPUP),
-			  ODA_SELECT );
+        lppop->items[lppop->FocusedItem].fState &= ~(MF_HILITE|MF_MOUSESELECT);
+        MENU_DrawMenuItem( lppop->hWnd, lppop, hwndOwner, hdc, &lppop->items[lppop->FocusedItem],
+                           !(lppop->wFlags & MF_POPUP), ODA_SELECT );
     }
 
       /* Highlight new item (if any) */
@@ -2000,9 +2033,8 @@ static void MENU_SelectItem( HWND hwndOwner, HMENU hmenu, UINT wIndex,
         if(!(lppop->items[wIndex].fType & MF_SEPARATOR)) {
             lppop->items[wIndex].fState |= MF_HILITE;
             MENU_EnsureMenuItemVisible(lppop, wIndex, hdc);
-            MENU_DrawMenuItem( lppop->hWnd, hmenu, hwndOwner, hdc,
-                    &lppop->items[wIndex], lppop->Height,
-                    !(lppop->wFlags & MF_POPUP), ODA_SELECT );
+            MENU_DrawMenuItem( lppop->hWnd, lppop, hwndOwner, hdc, &lppop->items[wIndex],
+                               !(lppop->wFlags & MF_POPUP), ODA_SELECT );
         }
         if (sendMenuSelect)
         {
@@ -2335,11 +2367,11 @@ static HMENU MENU_ShowSubPopup( HWND hwndOwner, HMENU hmenu,
         SelectObject( hdc, get_menu_font(FALSE));
 
         item->fState |= MF_HILITE;
-        MENU_DrawMenuItem( menu->hWnd, hmenu, hwndOwner, hdc, item, menu->Height, !(menu->wFlags & MF_POPUP), ODA_DRAWENTIRE );
-	ReleaseDC( menu->hWnd, hdc );
+        MENU_DrawMenuItem( menu->hWnd, menu, hwndOwner, hdc, item, !(menu->wFlags & MF_POPUP), ODA_DRAWENTIRE );
+        ReleaseDC( menu->hWnd, hdc );
     }
     if (!item->rect.top && !item->rect.left && !item->rect.bottom && !item->rect.right)
-      item->rect = rect;
+        item->rect = rect;
 
     item->fState |= MF_MOUSESELECT;
 
@@ -2549,29 +2581,28 @@ static BOOL MENU_ButtonDown( MTRACKER* pmt, HMENU hPtMenu, UINT wFlags )
 
     if (hPtMenu)
     {
-	UINT id = 0;
-	POPUPMENU *ptmenu = MENU_GetMenu( hPtMenu );
-	MENUITEM *item;
+        UINT pos;
+        POPUPMENU *ptmenu = MENU_GetMenu( hPtMenu );
+        enum hittest ht = ht_nowhere;
 
-	if( IS_SYSTEM_MENU(ptmenu) )
-	    item = ptmenu->items;
-	else
-	    item = MENU_FindItemByCoords( ptmenu, pmt->pt, &id );
+        if( IS_SYSTEM_MENU(ptmenu) )
+            pos = 0;
+        else
+            ht = MENU_FindItemByCoords( ptmenu, pmt->pt, &pos );
 
-	if( item )
-	{
-	    if( ptmenu->FocusedItem != id )
-		MENU_SwitchTracking( pmt, hPtMenu, id, wFlags );
+        if (pos != NO_SELECTED_ITEM)
+        {
+            if (ptmenu->FocusedItem != pos)
+                MENU_SwitchTracking( pmt, hPtMenu, pos, wFlags );
 
-	    /* If the popup menu is not already "popped" */
-	    if(!(item->fState & MF_MOUSESELECT ))
-	    {
-		pmt->hCurrentMenu = MENU_ShowSubPopup( pmt->hOwnerWnd, hPtMenu, FALSE, wFlags );
-	    }
+            /* If the popup menu is not already "popped" */
+            if (!(ptmenu->items[pos].fState & MF_MOUSESELECT))
+                pmt->hCurrentMenu = MENU_ShowSubPopup( pmt->hOwnerWnd, hPtMenu, FALSE, wFlags );
+        }
 
-	    return TRUE;
-	}
-	/* Else the click was on the menu bar, finish the tracking */
+        /* A click on an item or anywhere on a popup keeps tracking going */
+        if (ht == ht_item || ((ptmenu->wFlags & MF_POPUP) && ht != ht_nowhere))
+            return TRUE;
     }
     return FALSE;
 }
@@ -2590,20 +2621,19 @@ static INT MENU_ButtonUp( MTRACKER* pmt, HMENU hPtMenu, UINT wFlags)
 
     if (hPtMenu)
     {
-	UINT id = 0;
+	UINT pos;
 	POPUPMENU *ptmenu = MENU_GetMenu( hPtMenu );
-	MENUITEM *item;
 
         if( IS_SYSTEM_MENU(ptmenu) )
-            item = ptmenu->items;
-        else
-            item = MENU_FindItemByCoords( ptmenu, pmt->pt, &id );
+            pos = 0;
+        else if (MENU_FindItemByCoords( ptmenu, pmt->pt, &pos ) != ht_item)
+            pos = NO_SELECTED_ITEM;
 
-	if( item && (ptmenu->FocusedItem == id ))
+        if (pos != NO_SELECTED_ITEM && (ptmenu->FocusedItem == pos))
 	{
-            debug_print_menuitem ("FocusedItem: ", item, "");
+            debug_print_menuitem ("FocusedItem: ", &ptmenu->items[pos], "");
 
-	    if( !(item->fType & MF_POPUP) )
+	    if (!(ptmenu->items[pos].fType & MF_POPUP))
 	    {
 	        INT executedMenuId = MENU_ExecFocusedItem( pmt, hPtMenu, wFlags);
                 if (executedMenuId == -1 || executedMenuId == -2) return -1;
@@ -2638,8 +2668,8 @@ static BOOL MENU_MouseMove( MTRACKER* pmt, HMENU hPtMenu, UINT wFlags )
 	ptmenu = MENU_GetMenu( hPtMenu );
         if( IS_SYSTEM_MENU(ptmenu) )
 	    id = 0;
-        else
-            MENU_FindItemByCoords( ptmenu, pmt->pt, &id );
+        else if (MENU_FindItemByCoords( ptmenu, pmt->pt, &id ) != ht_item)
+            id = NO_SELECTED_ITEM;
     }
 
     if( id == NO_SELECTED_ITEM )
@@ -2650,8 +2680,8 @@ static BOOL MENU_MouseMove( MTRACKER* pmt, HMENU hPtMenu, UINT wFlags )
     }
     else if( ptmenu->FocusedItem != id )
     {
-	    MENU_SwitchTracking( pmt, hPtMenu, id, wFlags );
-	    pmt->hCurrentMenu = MENU_ShowSubPopup(pmt->hOwnerWnd, hPtMenu, FALSE, wFlags);
+        MENU_SwitchTracking( pmt, hPtMenu, id, wFlags );
+        pmt->hCurrentMenu = MENU_ShowSubPopup(pmt->hOwnerWnd, hPtMenu, FALSE, wFlags);
     }
     return TRUE;
 }
@@ -4431,10 +4461,8 @@ DWORD WINAPI DrawMenuBarTemp(HWND hwnd, HDC hDC, LPRECT lprect, HMENU hMenu, HFO
     }
 
     for (i = 0; i < lppop->nItems; i++)
-    {
-        MENU_DrawMenuItem( hwnd, hMenu, hwnd,
-                           hDC, &lppop->items[i], lppop->Height, TRUE, ODA_DRAWENTIRE );
-    }
+        MENU_DrawMenuItem( hwnd, lppop, hwnd, hDC, &lppop->items[i], TRUE, ODA_DRAWENTIRE );
+
     retvalue = lppop->Height;
 
 END:
@@ -5254,7 +5282,7 @@ INT WINAPI MenuItemFromPoint(HWND hWnd, HMENU hMenu, POINT ptScreen)
 
     /*FIXME: Do we have to handle hWnd here? */
     if (!menu) return -1;
-    if (!MENU_FindItemByCoords(menu, ptScreen, &pos)) return -1;
+    if (MENU_FindItemByCoords( menu, ptScreen, &pos ) != ht_item) return -1;
     return pos;
 }
 

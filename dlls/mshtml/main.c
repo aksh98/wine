@@ -43,6 +43,7 @@
 #include "mshtml_private.h"
 #include "resource.h"
 #include "pluginhost.h"
+#include "mscoree.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(mshtml);
 
@@ -588,6 +589,8 @@ const char *debugstr_mshtml_guid(const GUID *iid)
     X(IID_IHTMLPrivateWindow);
     X(IID_IHtmlLoadOptions);
     X(IID_IInternetHostSecurityManager);
+    X(IID_IManagedObject);
+    X(IID_IMarshal);
     X(IID_IMonikerProp);
     X(IID_IObjectIdentity);
     X(IID_IObjectSafety);
@@ -612,6 +615,8 @@ const char *debugstr_mshtml_guid(const GUID *iid)
     X(IID_IPersistStreamInit);
     X(IID_IPropertyNotifySink);
     X(IID_IProvideClassInfo);
+    X(IID_IProvideClassInfo2);
+    X(IID_IProvideMultipleClassInfo);
     X(IID_IServiceProvider);
     X(IID_ISupportErrorInfo);
     X(IID_ITargetContainer);

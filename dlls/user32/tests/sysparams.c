@@ -41,7 +41,7 @@
 static LONG (WINAPI *pChangeDisplaySettingsExA)(LPCSTR, LPDEVMODEA, HWND, DWORD, LPVOID);
 
 static BOOL strict;
-static int dpi;
+static int dpi, real_dpi;
 static BOOL iswin9x;
 static HDC hdc;
 
@@ -164,6 +164,36 @@ static int change_last_param;
 static int last_bpp;
 static BOOL displaychange_ok = FALSE, displaychange_test_active = FALSE;
 static HANDLE displaychange_sem = 0;
+
+static BOOL get_reg_dword(HKEY base, const char *key_name, const char *value_name, DWORD *value)
+{
+    HKEY key;
+    DWORD type, data, size = sizeof(data);
+    BOOL ret = FALSE;
+
+    if (RegOpenKeyA(base, key_name, &key) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExA(key, value_name, NULL, &type, (void *)&data, &size) == ERROR_SUCCESS &&
+            type == REG_DWORD)
+        {
+            *value = data;
+            ret = TRUE;
+        }
+        RegCloseKey(key);
+    }
+    return ret;
+}
+
+static DWORD get_real_dpi(void)
+{
+    DWORD dpi;
+
+    if (get_reg_dword(HKEY_CURRENT_USER, "Control Panel\\Desktop", "LogPixels", &dpi))
+        return dpi;
+    if (get_reg_dword(HKEY_CURRENT_CONFIG, "Software\\Fonts", "LogPixels", &dpi))
+        return dpi;
+    return USER_DEFAULT_SCREEN_DPI;
+}
 
 static LRESULT CALLBACK SysParamsTestWndProc( HWND hWnd, UINT msg, WPARAM wParam,
                                               LPARAM lParam )
@@ -871,7 +901,7 @@ static void test_SPI_SETKEYBOARDSPEED( void )          /*     10 */
 static BOOL dotest_spi_iconhorizontalspacing( INT curr_val)
 {
     BOOL rc;
-    INT spacing, regval;
+    INT spacing, regval, min_val = MulDiv( 32, dpi, USER_DEFAULT_SCREEN_DPI );
     ICONMETRICSA im;
 
     rc=SystemParametersInfoA( SPI_ICONHORIZONTALSPACING, curr_val, 0,
@@ -879,7 +909,7 @@ static BOOL dotest_spi_iconhorizontalspacing( INT curr_val)
     if (!test_error_msg(rc,"SPI_ICONHORIZONTALSPACING")) return FALSE;
     ok(rc, "SystemParametersInfoA: rc=%d err=%d\n", rc, GetLastError());
     test_change_message( SPI_ICONHORIZONTALSPACING, 0 );
-    if( curr_val < 32) curr_val = 32;
+    curr_val = max( curr_val, min_val );
     /* The registry keys depend on the Windows version and the values too
      * let's test (works on win95,ME,NT4,2k,XP)
      */
@@ -1040,7 +1070,7 @@ static void test_SPI_SETKEYBOARDDELAY( void )          /*     23 */
 static BOOL dotest_spi_iconverticalspacing( INT curr_val)
 {
     BOOL rc;
-    INT spacing, regval;
+    INT spacing, regval, min_val = MulDiv( 32, dpi, USER_DEFAULT_SCREEN_DPI );
     ICONMETRICSA im;
 
     rc=SystemParametersInfoA( SPI_ICONVERTICALSPACING, curr_val, 0,
@@ -1048,7 +1078,7 @@ static BOOL dotest_spi_iconverticalspacing( INT curr_val)
     if (!test_error_msg(rc,"SPI_ICONVERTICALSPACING")) return FALSE;
     ok(rc, "SystemParametersInfoA: rc=%d err=%d\n", rc, GetLastError());
     test_change_message( SPI_ICONVERTICALSPACING, 0 );
-    if( curr_val < 32) curr_val = 32;
+    curr_val = max( curr_val, min_val );
     /* The registry keys depend on the Windows version and the values too
      * let's test (works on win95,ME,NT4,2k,XP)
      */
@@ -1411,7 +1441,7 @@ static void test_SPI_SETDRAGFULLWINDOWS( void )        /*     37 */
 #define test_reg_font( KEY, VAL, LF) \
 {   LOGFONTA lfreg;\
     lffromreg( KEY, VAL, &lfreg);\
-    ok( (lfreg.lfHeight < 0 ? (LF).lfHeight == lfreg.lfHeight :\
+    ok( (lfreg.lfHeight < 0 ? (LF).lfHeight == MulDiv( lfreg.lfHeight, dpi, real_dpi ) : \
                 MulDiv( -(LF).lfHeight , 72, dpi) == lfreg.lfHeight )&&\
         (LF).lfWidth == lfreg.lfWidth &&\
         (LF).lfWeight == lfreg.lfWeight &&\
@@ -1475,12 +1505,14 @@ static void test_SPI_SETNONCLIENTMETRICS( void )               /*     44 */
        the caption font height is higher than the CaptionHeight field,
        the latter is adjusted accordingly. To be able to restore these setting
        accurately be restore the raw values. */
-    Ncmorig.iCaptionWidth = metricfromreg( SPI_METRIC_REGKEY, SPI_CAPTIONWIDTH_VALNAME, dpi);
+    Ncmorig.iCaptionWidth = metricfromreg( SPI_METRIC_REGKEY, SPI_CAPTIONWIDTH_VALNAME, real_dpi);
     Ncmorig.iCaptionHeight = metricfromreg( SPI_METRIC_REGKEY, SPI_CAPTIONHEIGHT_VALNAME, dpi);
     Ncmorig.iSmCaptionHeight = metricfromreg( SPI_METRIC_REGKEY, SPI_SMCAPTIONHEIGHT_VALNAME, dpi);
     Ncmorig.iMenuHeight = metricfromreg( SPI_METRIC_REGKEY, SPI_MENUHEIGHT_VALNAME, dpi);
     /* test registry entries */
     TEST_NONCLIENTMETRICS_REG( Ncmorig)
+    Ncmorig.lfCaptionFont.lfHeight = MulDiv( Ncmorig.lfCaptionFont.lfHeight, real_dpi, dpi );
+
     /* make small changes */
     Ncmnew = Ncmstart;
     Ncmnew.iBorderWidth += 1;
@@ -2933,6 +2965,8 @@ START_TEST(sysparams)
     hInstance = GetModuleHandleA( NULL );
     hdc = GetDC(0);
     dpi = GetDeviceCaps( hdc, LOGPIXELSY);
+    real_dpi = get_real_dpi();
+    trace("dpi %d real_dpi %d\n", dpi, real_dpi);
     iswin9x = GetVersion() & 0x80000000;
 
     /* This test requires interactivity, if we don't have it, give up */

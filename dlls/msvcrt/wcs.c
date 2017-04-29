@@ -1858,6 +1858,30 @@ INT CDECL MSVCRT_iswxdigit( MSVCRT_wchar_t wc )
 }
 
 /*********************************************************************
+ *		_iswctype_l (MSVCRT.@)
+ */
+INT CDECL MSVCRT__iswctype_l( MSVCRT_wchar_t wc, MSVCRT_wctype_t type, MSVCRT__locale_t locale )
+{
+    return (get_char_typeW(wc) & 0xffff) & type;
+}
+
+/*********************************************************************
+ *		_iswblank_l (MSVCRT.@)
+ */
+INT CDECL MSVCRT__iswblank_l( MSVCRT_wchar_t wc, MSVCRT__locale_t locale )
+{
+    return wc == '\t' || MSVCRT__iswctype_l( wc, MSVCRT__BLANK, locale );
+}
+
+/*********************************************************************
+ *		iswblank (MSVCRT.@)
+ */
+INT CDECL MSVCRT_iswblank( MSVCRT_wchar_t wc )
+{
+    return wc == '\t' || MSVCRT__iswctype_l( wc, MSVCRT__BLANK, NULL );
+}
+
+/*********************************************************************
  *		wcscpy_s (MSVCRT.@)
  */
 INT CDECL MSVCRT_wcscpy_s( MSVCRT_wchar_t* wcDest, MSVCRT_size_t numElement, const  MSVCRT_wchar_t *wcSrc)

@@ -182,13 +182,13 @@ struct layout_effective_run {
     UINT32 length;          /* length in codepoints that this run covers */
     UINT32 glyphcount;      /* total glyph count in this run */
     IUnknown *effect;       /* original reference is kept only at range level */
-    FLOAT origin_x;         /* baseline X position */
-    FLOAT origin_y;         /* baseline Y position */
+    D2D1_POINT_2F origin;   /* baseline origin */
     FLOAT align_dx;         /* adjustment from text alignment */
     FLOAT width;            /* run width */
     UINT16 *clustermap;     /* effective clustermap, allocated separately, is not reused from nominal map */
     UINT32 line;            /* 0-based line index in line metrics array */
     BOOL underlined;        /* set if this run is underlined */
+    D2D1_RECT_F bbox;       /* ink run box, top == bottom means it wasn't estimated yet */
 };
 
 struct layout_effective_inline {
@@ -196,8 +196,7 @@ struct layout_effective_inline {
     IDWriteInlineObject *object;  /* inline object, set explicitly or added when trimming a line */
     IUnknown *effect;             /* original reference is kept only at range level */
     FLOAT baseline;
-    FLOAT origin_x;               /* left X position */
-    FLOAT origin_y;               /* left top corner Y position */
+    D2D1_POINT_2F origin;         /* left top corner */
     FLOAT align_dx;               /* adjustment from text alignment */
     FLOAT width;                  /* object width as it's reported it */
     BOOL  is_sideways;            /* vertical flow direction flag passed to Draw */
@@ -304,11 +303,6 @@ struct dwrite_typography {
     DWRITE_FONT_FEATURE *features;
     UINT32 allocated;
     UINT32 count;
-};
-
-struct dwrite_vec {
-    FLOAT x;
-    FLOAT y;
 };
 
 static const IDWriteTextFormat2Vtbl dwritetextformatvtbl;
@@ -1217,8 +1211,8 @@ static HRESULT layout_add_effective_run(struct dwrite_textlayout *layout, const 
 
         inlineobject->object = r->u.object.object;
         inlineobject->width = get_cluster_range_width(layout, first_cluster, first_cluster + cluster_count);
-        inlineobject->origin_x = is_rtl ? origin_x - inlineobject->width : origin_x;
-        inlineobject->origin_y = 0.0f; /* set after line is built */
+        inlineobject->origin.x = is_rtl ? origin_x - inlineobject->width : origin_x;
+        inlineobject->origin.y = 0.0f; /* set after line is built */
         inlineobject->align_dx = 0.0f;
         inlineobject->baseline = r->baseline;
 
@@ -1256,23 +1250,23 @@ static HRESULT layout_add_effective_run(struct dwrite_textlayout *layout, const 
     run->start = start = layout->clusters[first_cluster].position;
     run->length = length;
     run->width = get_cluster_range_width(layout, first_cluster, first_cluster + cluster_count);
+    memset(&run->bbox, 0, sizeof(run->bbox));
 
     /* Check if run direction matches paragraph direction, if it doesn't adjust by
        run width */
     if (layout_is_erun_rtl(run) ^ is_rtl)
-        run->origin_x = is_rtl ? origin_x - run->width : origin_x + run->width;
+        run->origin.x = is_rtl ? origin_x - run->width : origin_x + run->width;
     else
-        run->origin_x = origin_x;
+        run->origin.x = origin_x;
 
-    run->origin_y = 0.0f; /* set after line is built */
+    run->origin.y = 0.0f; /* set after line is built */
     run->align_dx = 0.0f;
     run->line = line;
 
     if (r->u.regular.run.glyphCount) {
-        /* trim from the left */
+        /* Trim leading and trailing clusters. */
         run->glyphcount = r->u.regular.run.glyphCount - r->u.regular.clustermap[start];
-        /* trim from the right */
-        if (start + length < r->u.regular.descr.stringLength - 1)
+        if (start + length < r->u.regular.descr.stringLength)
             run->glyphcount -= r->u.regular.run.glyphCount - r->u.regular.clustermap[start + length];
     }
     else
@@ -1444,28 +1438,28 @@ static inline BOOL should_skip_transform(const DWRITE_MATRIX *m, FLOAT *det)
     return (!memcmp(m, &identity, sizeof(*m)) || fabsf(*det) <= 1e-10f);
 }
 
-static inline void layout_apply_snapping(struct dwrite_vec *vec, BOOL skiptransform, FLOAT ppdip,
+static inline void layout_apply_snapping(D2D1_POINT_2F *vec, BOOL skiptransform, FLOAT ppdip,
     const DWRITE_MATRIX *m, FLOAT det)
 {
     if (!skiptransform) {
-        FLOAT vec2[2];
+        D2D1_POINT_2F vec2;
 
         /* apply transform */
         vec->x *= ppdip;
         vec->y *= ppdip;
 
-        vec2[0] = m->m11 * vec->x + m->m21 * vec->y + m->dx;
-        vec2[1] = m->m12 * vec->x + m->m22 * vec->y + m->dy;
+        vec2.x = m->m11 * vec->x + m->m21 * vec->y + m->dx;
+        vec2.y = m->m12 * vec->x + m->m22 * vec->y + m->dy;
 
         /* snap */
-        vec2[0] = floorf(vec2[0] + 0.5f);
-        vec2[1] = floorf(vec2[1] + 0.5f);
+        vec2.x = floorf(vec2.x + 0.5f);
+        vec2.y = floorf(vec2.y + 0.5f);
 
         /* apply inverted transform, we don't care about X component at this point */
-        vec->x = (m->m22 * vec2[0] - m->m21 * vec2[1] + m->m21 * m->dy - m->m22 * m->dx) / det;
+        vec->x = (m->m22 * vec2.x - m->m21 * vec2.y + m->m21 * m->dy - m->m22 * m->dx) / det;
         vec->x /= ppdip;
 
-        vec->y = (-m->m12 * vec2[0] + m->m11 * vec2[1] - (m->m11 * m->dy - m->m12 * m->dx)) / det;
+        vec->y = (-m->m12 * vec2.x + m->m11 * vec2.y - (m->m11 * m->dy - m->m12 * m->dx)) / det;
         vec->y /= ppdip;
     }
     else {
@@ -1531,7 +1525,7 @@ static inline FLOAT layout_get_centered_shift(struct dwrite_textlayout *layout, 
     FLOAT width, FLOAT det)
 {
     if (is_layout_gdi_compatible(layout)) {
-        struct dwrite_vec vec = { layout->metrics.layoutWidth - width, 0.0f};
+        D2D1_POINT_2F vec = { layout->metrics.layoutWidth - width, 0.0f};
         layout_apply_snapping(&vec, skiptransform, layout->ppdip, &layout->transform, det);
         return floorf(vec.x / 2.0f);
     }
@@ -1628,12 +1622,12 @@ static void layout_apply_par_alignment(struct dwrite_textlayout *layout)
         FLOAT pos_y = origin_y + layout->linemetrics[line].baseline;
 
         while (erun && erun->line == line) {
-            erun->origin_y = pos_y;
+            erun->origin.y = pos_y;
             erun = layout_get_next_erun(layout, erun);
         }
 
         while (inrun && inrun->line == line) {
-            inrun->origin_y = pos_y - inrun->baseline;
+            inrun->origin.y = pos_y - inrun->baseline;
             inrun = layout_get_next_inline_run(layout, inrun);
         }
 
@@ -1879,8 +1873,8 @@ static void layout_add_line(struct dwrite_textlayout *layout, UINT32 first_clust
         trimming_sign->object = layout->format.trimmingsign;
         trimming_sign->width = sign_metrics.width;
         origin_x += is_rtl ? -get_cluster_range_width(layout, start, i) : get_cluster_range_width(layout, start, i);
-        trimming_sign->origin_x = is_rtl ? origin_x - trimming_sign->width : origin_x;
-        trimming_sign->origin_y = 0.0f; /* set after line is built */
+        trimming_sign->origin.x = is_rtl ? origin_x - trimming_sign->width : origin_x;
+        trimming_sign->origin.y = 0.0f; /* set after line is built */
         trimming_sign->align_dx = 0.0f;
         trimming_sign->baseline = sign_metrics.baseline;
 
@@ -1931,13 +1925,13 @@ static void layout_set_line_positions(struct dwrite_textlayout *layout)
 
         /* For all runs on this line */
         while (erun && erun->line == line) {
-            erun->origin_y = pos_y;
+            erun->origin.y = pos_y;
             erun = layout_get_next_erun(layout, erun);
         }
 
         /* Same for inline runs */
         while (inrun && inrun->line == line) {
-            inrun->origin_y = pos_y - inrun->baseline;
+            inrun->origin.y = pos_y - inrun->baseline;
             inrun = layout_get_next_inline_run(layout, inrun);
         }
 
@@ -3361,28 +3355,28 @@ static HRESULT WINAPI dwritetextlayout_layout_GetLocaleName(IDWriteTextLayout3 *
 static inline FLOAT renderer_apply_snapping(FLOAT coord, BOOL skiptransform, FLOAT ppdip, FLOAT det,
     const DWRITE_MATRIX *m)
 {
-    FLOAT vec[2], vec2[2];
+    D2D1_POINT_2F vec, vec2;
 
     if (!skiptransform) {
         /* apply transform */
-        vec[0] = 0.0f;
-        vec[1] = coord * ppdip;
+        vec.x = 0.0f;
+        vec.y = coord * ppdip;
 
-        vec2[0] = m->m11 * vec[0] + m->m21 * vec[1] + m->dx;
-        vec2[1] = m->m12 * vec[0] + m->m22 * vec[1] + m->dy;
+        vec2.x = m->m11 * vec.x + m->m21 * vec.y + m->dx;
+        vec2.y = m->m12 * vec.x + m->m22 * vec.y + m->dy;
 
         /* snap */
-        vec2[0] = floorf(vec2[0] + 0.5f);
-        vec2[1] = floorf(vec2[1] + 0.5f);
+        vec2.x = floorf(vec2.x + 0.5f);
+        vec2.y = floorf(vec2.y + 0.5f);
 
         /* apply inverted transform, we don't care about X component at this point */
-        vec[1] = (-m->m12 * vec2[0] + m->m11 * vec2[1] - (m->m11 * m->dy - m->m12 * m->dx)) / det;
-        vec[1] /= ppdip;
+        vec.y = (-m->m12 * vec2.x + m->m11 * vec2.y - (m->m11 * m->dy - m->m12 * m->dx)) / det;
+        vec.y /= ppdip;
     }
     else
-        vec[1] = floorf(coord * ppdip + 0.5f) / ppdip;
+        vec.y = floorf(coord * ppdip + 0.5f) / ppdip;
 
-    return vec[1];
+    return vec.y;
 }
 
 static HRESULT WINAPI dwritetextlayout_Draw(IDWriteTextLayout3 *iface,
@@ -3455,8 +3449,8 @@ static HRESULT WINAPI dwritetextlayout_Draw(IDWriteTextLayout3 *iface,
         /* return value is ignored */
         IDWriteTextRenderer_DrawGlyphRun(renderer,
             context,
-            run->origin_x + run->align_dx + origin_x,
-            SNAP_COORD(run->origin_y + origin_y),
+            run->origin.x + run->align_dx + origin_x,
+            SNAP_COORD(run->origin.y + origin_y),
             This->measuringmode,
             &glyph_run,
             &descr,
@@ -3467,8 +3461,8 @@ static HRESULT WINAPI dwritetextlayout_Draw(IDWriteTextLayout3 *iface,
     LIST_FOR_EACH_ENTRY(inlineobject, &This->inlineobjects, struct layout_effective_inline, entry) {
         IDWriteTextRenderer_DrawInlineObject(renderer,
             context,
-            inlineobject->origin_x + inlineobject->align_dx + origin_x,
-            SNAP_COORD(inlineobject->origin_y + origin_y),
+            inlineobject->origin.x + inlineobject->align_dx + origin_x,
+            SNAP_COORD(inlineobject->origin.y + origin_y),
             inlineobject->object,
             inlineobject->is_sideways,
             inlineobject->is_rtl,
@@ -3480,8 +3474,8 @@ static HRESULT WINAPI dwritetextlayout_Draw(IDWriteTextLayout3 *iface,
         IDWriteTextRenderer_DrawUnderline(renderer,
             context,
             /* horizontal underline always grows from left to right, width is always added to origin regardless of run direction */
-            (is_run_rtl(u->run) ? u->run->origin_x - u->run->width : u->run->origin_x) + u->run->align_dx + origin_x,
-            SNAP_COORD(u->run->origin_y + origin_y),
+            (is_run_rtl(u->run) ? u->run->origin.x - u->run->width : u->run->origin.x) + u->run->align_dx + origin_x,
+            SNAP_COORD(u->run->origin.y + origin_y),
             &u->u,
             u->run->effect);
     }
@@ -3490,8 +3484,8 @@ static HRESULT WINAPI dwritetextlayout_Draw(IDWriteTextLayout3 *iface,
     LIST_FOR_EACH_ENTRY(s, &This->strikethrough, struct layout_strikethrough, entry) {
         IDWriteTextRenderer_DrawStrikethrough(renderer,
             context,
-            s->run->origin_x + s->run->align_dx + origin_x,
-            SNAP_COORD(s->run->origin_y + origin_y),
+            s->run->origin.x + s->run->align_dx + origin_x,
+            SNAP_COORD(s->run->origin.y + origin_y),
             &s->s,
             s->run->effect);
     }
@@ -3537,7 +3531,7 @@ static HRESULT WINAPI dwritetextlayout_GetMetrics(IDWriteTextLayout3 *iface, DWR
     return hr;
 }
 
-static void scale_glyph_bbox(RECT *bbox, FLOAT emSize, UINT16 units_per_em, D2D_RECT_F *ret)
+static void scale_glyph_bbox(RECT *bbox, FLOAT emSize, UINT16 units_per_em, D2D1_RECT_F *ret)
 {
 #define SCALE(x) ((FLOAT)x * emSize / (FLOAT)units_per_em)
     ret->left = SCALE(bbox->left);
@@ -3547,7 +3541,7 @@ static void scale_glyph_bbox(RECT *bbox, FLOAT emSize, UINT16 units_per_em, D2D_
 #undef SCALE
 }
 
-static void d2d_rect_offset(D2D_RECT_F *rect, FLOAT x, FLOAT y)
+static void d2d_rect_offset(D2D1_RECT_F *rect, FLOAT x, FLOAT y)
 {
     rect->left += x;
     rect->right += x;
@@ -3555,12 +3549,12 @@ static void d2d_rect_offset(D2D_RECT_F *rect, FLOAT x, FLOAT y)
     rect->bottom += y;
 }
 
-static BOOL d2d_rect_is_empty(const D2D_RECT_F *rect)
+static BOOL d2d_rect_is_empty(const D2D1_RECT_F *rect)
 {
     return ((rect->left >= rect->right) || (rect->top >= rect->bottom));
 }
 
-static void d2d_rect_union(D2D_RECT_F *dst, const D2D_RECT_F *src)
+static void d2d_rect_union(D2D1_RECT_F *dst, const D2D1_RECT_F *src)
 {
     if (d2d_rect_is_empty(dst)) {
         if (d2d_rect_is_empty(src)) {
@@ -3580,34 +3574,37 @@ static void d2d_rect_union(D2D_RECT_F *dst, const D2D_RECT_F *src)
     }
 }
 
-static void layout_get_erun_bbox(struct dwrite_textlayout *layout, struct layout_effective_run *run, D2D_RECT_F *bbox)
+static void layout_get_erun_bbox(struct dwrite_textlayout *layout, struct layout_effective_run *run, D2D1_RECT_F *bbox)
 {
     const struct regular_layout_run *regular = &run->run->u.regular;
     UINT32 start_glyph = regular->clustermap[run->start];
     const DWRITE_GLYPH_RUN *glyph_run = &regular->run;
     DWRITE_FONT_METRICS font_metrics;
-    D2D_POINT_2F origin = { 0 };
+    D2D1_POINT_2F origin = { 0 };
     UINT32 i;
 
-    IDWriteFontFace_GetMetrics(glyph_run->fontFace, &font_metrics);
+    if (run->bbox.top == run->bbox.bottom) {
+        IDWriteFontFace_GetMetrics(glyph_run->fontFace, &font_metrics);
 
-    origin.x = run->origin_x + run->align_dx;
-    origin.y = run->origin_y;
-    for (i = 0; i < run->glyphcount; i++) {
-        D2D_RECT_F glyph_bbox;
-        RECT design_bbox;
+        for (i = 0; i < run->glyphcount; i++) {
+            D2D1_RECT_F glyph_bbox;
+            RECT design_bbox;
 
-        freetype_get_design_glyph_bbox((IDWriteFontFace4 *)glyph_run->fontFace, font_metrics.designUnitsPerEm,
-                glyph_run->glyphIndices[i + start_glyph], &design_bbox);
+            freetype_get_design_glyph_bbox((IDWriteFontFace4 *)glyph_run->fontFace, font_metrics.designUnitsPerEm,
+                    glyph_run->glyphIndices[i + start_glyph], &design_bbox);
 
-        scale_glyph_bbox(&design_bbox, glyph_run->fontEmSize, font_metrics.designUnitsPerEm, &glyph_bbox);
-        d2d_rect_offset(&glyph_bbox, origin.x + glyph_run->glyphOffsets[i + start_glyph].advanceOffset,
-                origin.y + glyph_run->glyphOffsets[i + start_glyph].ascenderOffset);
-        d2d_rect_union(bbox, &glyph_bbox);
+            scale_glyph_bbox(&design_bbox, glyph_run->fontEmSize, font_metrics.designUnitsPerEm, &glyph_bbox);
+            d2d_rect_offset(&glyph_bbox, origin.x + glyph_run->glyphOffsets[i + start_glyph].advanceOffset,
+                    origin.y + glyph_run->glyphOffsets[i + start_glyph].ascenderOffset);
+            d2d_rect_union(&run->bbox, &glyph_bbox);
 
-        /* FIXME: take care of vertical/rtl */
-        origin.x += glyph_run->glyphAdvances[i + start_glyph];
+            /* FIXME: take care of vertical/rtl */
+            origin.x += glyph_run->glyphAdvances[i + start_glyph];
+       }
     }
+
+    *bbox = run->bbox;
+    d2d_rect_offset(bbox, run->origin.x + run->align_dx, run->origin.y);
 }
 
 static HRESULT WINAPI dwritetextlayout_GetOverhangMetrics(IDWriteTextLayout3 *iface,
@@ -3615,7 +3612,7 @@ static HRESULT WINAPI dwritetextlayout_GetOverhangMetrics(IDWriteTextLayout3 *if
 {
     struct dwrite_textlayout *This = impl_from_IDWriteTextLayout3(iface);
     struct layout_effective_run *run;
-    D2D_RECT_F bbox = { 0 };
+    D2D1_RECT_F bbox = { 0 };
     HRESULT hr;
 
     TRACE("(%p)->(%p)\n", This, overhangs);
@@ -3632,7 +3629,7 @@ static HRESULT WINAPI dwritetextlayout_GetOverhangMetrics(IDWriteTextLayout3 *if
         return hr;
 
     LIST_FOR_EACH_ENTRY(run, &This->eruns, struct layout_effective_run, entry) {
-        D2D_RECT_F run_bbox;
+        D2D1_RECT_F run_bbox;
 
         layout_get_erun_bbox(This, run, &run_bbox);
         d2d_rect_union(&bbox, &run_bbox);
@@ -4099,9 +4096,12 @@ static HRESULT WINAPI dwritetextformat_layout_SetTextAlignment(IDWriteTextFormat
     if (FAILED(hr))
         return hr;
 
-    /* if layout is not ready there's nothing to align */
-    if (changed && !(This->recompute & RECOMPUTE_LINES))
-        layout_apply_text_alignment(This);
+    if (changed) {
+        /* if layout is not ready there's nothing to align */
+        if (!(This->recompute & RECOMPUTE_LINES))
+            layout_apply_text_alignment(This);
+        This->recompute |= RECOMPUTE_OVERHANGS;
+    }
 
     return S_OK;
 }
@@ -4118,9 +4118,12 @@ static HRESULT WINAPI dwritetextformat_layout_SetParagraphAlignment(IDWriteTextF
     if (FAILED(hr))
         return hr;
 
-    /* if layout is not ready there's nothing to align */
-    if (changed && !(This->recompute & RECOMPUTE_LINES))
-        layout_apply_par_alignment(This);
+    if (changed) {
+        /* if layout is not ready there's nothing to align */
+        if (!(This->recompute & RECOMPUTE_LINES))
+            layout_apply_par_alignment(This);
+        This->recompute |= RECOMPUTE_OVERHANGS;
+    }
 
     return S_OK;
 }

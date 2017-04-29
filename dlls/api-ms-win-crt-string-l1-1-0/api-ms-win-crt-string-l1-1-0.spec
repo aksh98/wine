@@ -7,7 +7,7 @@
 @ stub __wcsncnt
 @ cdecl _isalnum_l(long ptr) ucrtbase._isalnum_l
 @ cdecl _isalpha_l(long ptr) ucrtbase._isalpha_l
-@ stub _isblank_l
+@ cdecl _isblank_l(long ptr) ucrtbase._isblank_l
 @ cdecl _iscntrl_l(long ptr) ucrtbase._iscntrl_l
 @ cdecl _isctype(long long) ucrtbase._isctype
 @ cdecl _isctype_l(long long ptr) ucrtbase._isctype_l
@@ -21,11 +21,11 @@
 @ cdecl _isupper_l(long ptr) ucrtbase._isupper_l
 @ stub _iswalnum_l
 @ cdecl _iswalpha_l(long ptr) ucrtbase._iswalpha_l
-@ stub _iswblank_l
+@ cdecl _iswblank_l(long ptr) ucrtbase._iswblank_l
 @ stub _iswcntrl_l
 @ stub _iswcsym_l
 @ stub _iswcsymf_l
-@ stub _iswctype_l
+@ cdecl _iswctype_l(long long ptr) ucrtbase._iswctype_l
 @ cdecl _iswdigit_l(long ptr) ucrtbase._iswdigit_l
 @ stub _iswgraph_l
 @ stub _iswlower_l
@@ -100,7 +100,7 @@
 @ cdecl is_wctype(long long) ucrtbase.is_wctype
 @ cdecl isalnum(long) ucrtbase.isalnum
 @ cdecl isalpha(long) ucrtbase.isalpha
-@ stub isblank
+@ cdecl isblank(long) ucrtbase.isblank
 @ cdecl iscntrl(long) ucrtbase.iscntrl
 @ cdecl isdigit(long) ucrtbase.isdigit
 @ cdecl isgraph(long) ucrtbase.isgraph
@@ -113,7 +113,7 @@
 @ cdecl iswalnum(long) ucrtbase.iswalnum
 @ cdecl iswalpha(long) ucrtbase.iswalpha
 @ cdecl iswascii(long) ucrtbase.iswascii
-@ stub iswblank
+@ cdecl iswblank(long) ucrtbase.iswblank
 @ cdecl iswcntrl(long) ucrtbase.iswcntrl
 @ cdecl iswctype(long long) ucrtbase.iswctype
 @ cdecl iswdigit(long) ucrtbase.iswdigit
@@ -173,6 +173,6 @@
 @ cdecl wcstok(wstr wstr) ucrtbase.wcstok
 @ cdecl wcstok_s(ptr wstr ptr) ucrtbase.wcstok_s
 @ cdecl wcsxfrm(ptr wstr long) ucrtbase.wcsxfrm
-@ stub wctype
+@ cdecl wctype(str) ucrtbase.wctype
 @ cdecl wmemcpy_s(ptr long ptr long) ucrtbase.wmemcpy_s
 @ cdecl wmemmove_s(ptr long ptr long) ucrtbase.wmemmove_s

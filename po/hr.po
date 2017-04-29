@@ -7595,7 +7595,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr "Umeće sadržaj iz ostave u dokument."
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr "Nepoznata vrsta"
 
@@ -11865,6 +11865,10 @@ msgstr ""
 #| msgid "Could not open the file."
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "Datoteka se ne može otvoriti."
+
+#: regedit.rc:398
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr ""
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

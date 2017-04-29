@@ -430,7 +430,7 @@
 @ cdecl _isalnum_l(long ptr) MSVCRT__isalnum_l
 @ cdecl _isalpha_l(long ptr) MSVCRT__isalpha_l
 @ cdecl _isatty(long) MSVCRT__isatty
-@ stub _isblank_l
+@ cdecl _isblank_l(long ptr) MSVCRT__isblank_l
 @ cdecl _iscntrl_l(long ptr) MSVCRT__iscntrl_l
 @ cdecl _isctype(long long) MSVCRT__isctype
 @ cdecl _isctype_l(long long ptr) MSVCRT__isctype_l
@@ -508,11 +508,11 @@
 @ cdecl _isupper_l(long ptr) MSVCRT__isupper_l
 @ stub _iswalnum_l
 @ cdecl _iswalpha_l(long ptr) MSVCRT__iswalpha_l
-@ stub _iswblank_l
+@ cdecl _iswblank_l(long ptr) MSVCRT__iswblank_l
 @ stub _iswcntrl_l
 @ stub _iswcsym_l
 @ stub _iswcsymf_l
-@ stub _iswctype_l
+@ cdecl _iswctype_l(long long ptr) MSVCRT__iswctype_l
 @ cdecl _iswdigit_l(long ptr) MSVCRT__iswdigit_l
 @ stub _iswgraph_l
 @ stub _iswlower_l
@@ -2289,13 +2289,13 @@
 @ stub feclearexcept
 @ cdecl fegetenv(ptr) MSVCRT_fegetenv
 @ stub fegetexceptflag
-@ stub fegetround
+@ cdecl fegetround() MSVCRT_fegetround
 @ stub feholdexcept
 @ cdecl feof(ptr) MSVCRT_feof
 @ cdecl ferror(ptr) MSVCRT_ferror
 @ cdecl fesetenv(ptr) MSVCRT_fesetenv
 @ stub fesetexceptflag
-@ stub fesetround
+@ cdecl fesetround(long) MSVCRT_fesetround
 @ stub fetestexcept
 @ cdecl fflush(ptr) MSVCRT_fflush
 @ cdecl fgetc(ptr) MSVCRT_fgetc
@@ -2349,7 +2349,7 @@
 @ cdecl is_wctype(long long) ntdll.iswctype
 @ cdecl isalnum(long) MSVCRT_isalnum
 @ cdecl isalpha(long) MSVCRT_isalpha
-@ stub isblank
+@ cdecl isblank(long) MSVCRT_isblank
 @ cdecl iscntrl(long) MSVCRT_iscntrl
 @ cdecl isdigit(long) MSVCRT_isdigit
 @ cdecl isgraph(long) MSVCRT_isgraph
@@ -2362,7 +2362,7 @@
 @ cdecl iswalnum(long) MSVCRT_iswalnum
 @ cdecl iswalpha(long) ntdll.iswalpha
 @ cdecl iswascii(long) MSVCRT_iswascii
-@ stub iswblank
+@ cdecl iswblank(long) MSVCRT_iswblank
 @ cdecl iswcntrl(long) MSVCRT_iswcntrl
 @ cdecl iswctype(long long) ntdll.iswctype
 @ cdecl iswdigit(long) MSVCRT_iswdigit
@@ -2594,6 +2594,6 @@
 @ cdecl wctomb(ptr long) MSVCRT_wctomb
 @ cdecl wctomb_s(ptr ptr long long) MSVCRT_wctomb_s
 @ stub wctrans
-@ stub wctype
+@ cdecl wctype(str)
 @ cdecl wmemcpy_s(ptr long ptr long)
 @ cdecl wmemmove_s(ptr long ptr long)

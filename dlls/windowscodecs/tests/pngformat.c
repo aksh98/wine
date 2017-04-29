@@ -25,6 +25,7 @@
 #include "windef.h"
 #include "wincodec.h"
 #include "wine/test.h"
+#include "shlwapi.h"
 
 /* 1x1 pixel PNG image */
 static const char png_no_color_profile[] = {
@@ -277,21 +278,16 @@ static IWICImagingFactory *factory;
 
 static IWICBitmapDecoder *create_decoder(const void *image_data, UINT image_size)
 {
-    HGLOBAL hmem;
-    BYTE *data;
     HRESULT hr;
     IWICBitmapDecoder *decoder = NULL;
     IStream *stream;
     GUID format;
     LONG refcount;
+    ULARGE_INTEGER pos;
+    LARGE_INTEGER zero;
 
-    hmem = GlobalAlloc(0, image_size);
-    data = GlobalLock(hmem);
-    memcpy(data, image_data, image_size);
-    GlobalUnlock(hmem);
-
-    hr = CreateStreamOnHGlobal(hmem, TRUE, &stream);
-    ok(hr == S_OK, "CreateStreamOnHGlobal error %#x\n", hr);
+    stream = SHCreateMemStream (image_data, image_size);
+    ok(stream != NULL, "SHCreateMemStream error\n");
 
     hr = IWICImagingFactory_CreateDecoderFromStream(factory, stream, NULL, 0, &decoder);
     ok(hr == S_OK, "CreateDecoderFromStream error %#x\n", hr);
@@ -301,6 +297,11 @@ static IWICBitmapDecoder *create_decoder(const void *image_data, UINT image_size
     ok(hr == S_OK, "GetContainerFormat error %#x\n", hr);
     ok(IsEqualGUID(&format, &GUID_ContainerFormatPng),
        "wrong container format %s\n", wine_dbgstr_guid(&format));
+
+    zero.QuadPart = 0;
+    IStream_Seek (stream, zero, STREAM_SEEK_CUR, &pos);
+    ok(pos.QuadPart < image_size, "seek beyond the end of stream: %x%08x >= %x\n",
+       (UINT)(pos.QuadPart >> 32), (UINT)pos.QuadPart, image_size);
 
     refcount = IStream_Release(stream);
     ok(refcount > 0, "expected stream refcount > 0\n");

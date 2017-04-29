@@ -2049,6 +2049,25 @@ static const char headmsg[] =
 "Content-Length: 100\r\n"
 "\r\n";
 
+static const char multiauth[] =
+"HTTP/1.1 401 Unauthorized\r\n"
+"Server: winetest\r\n"
+"WWW-Authenticate: Bearer\r\n"
+"WWW-Authenticate: Basic realm=\"placebo\"\r\n"
+"WWW-Authenticate: NTLM\r\n"
+"Content-Length: 10\r\n"
+"Content-Type: text/plain\r\n"
+"\r\n";
+
+static const char largeauth[] =
+"HTTP/1.1 401 Unauthorized\r\n"
+"Server: winetest\r\n"
+"WWW-Authenticate: Basic realm=\"placebo\"\r\n"
+"WWW-Authenticate: NTLM\r\n"
+"Content-Length: 10240\r\n"
+"Content-Type: text/plain\r\n"
+"\r\n";
+
 static const char unauthorized[] = "Unauthorized";
 static const char hello_world[] = "Hello World";
 
@@ -2150,6 +2169,21 @@ static DWORD CALLBACK server_thread(LPVOID param)
         {
             send(c, headmsg, sizeof headmsg - 1, 0);
             continue;
+        }
+        if (strstr(buffer, "GET /multiauth"))
+        {
+            send(c, multiauth, sizeof multiauth - 1, 0);
+        }
+        if (strstr(buffer, "GET /largeauth"))
+        {
+            if (strstr(buffer, "Authorization: NTLM"))
+                send(c, okmsg, sizeof(okmsg) - 1, 0);
+            else
+            {
+                send(c, largeauth, sizeof largeauth - 1, 0);
+                for (i = 0; i < 10240; i++) send(c, "A", 1, 0);
+                continue;
+            }
         }
         if (strstr(buffer, "GET /cookie5"))
         {
@@ -2498,6 +2532,93 @@ static void test_basic_authentication(int port)
     ret = WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE|WINHTTP_QUERY_FLAG_NUMBER, NULL, &status, &size, NULL);
     ok(ret, "failed to query status code %u\n", GetLastError());
     ok(status == HTTP_STATUS_DENIED, "request failed unexpectedly %u\n", status);
+
+    WinHttpCloseHandle(req);
+    WinHttpCloseHandle(con);
+    WinHttpCloseHandle(ses);
+}
+
+static void test_multi_authentication(int port)
+{
+    static const WCHAR multiauthW[] = {'/','m','u','l','t','i','a','u','t','h',0};
+    static const WCHAR getW[] = {'G','E','T',0};
+    HINTERNET ses, con, req;
+    DWORD supported, first, target;
+    BOOL ret;
+
+    ses = WinHttpOpen(test_useragent, WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
+    ok(ses != NULL, "failed to open session %u\n", GetLastError());
+
+    con = WinHttpConnect(ses, localhostW, port, 0);
+    ok(con != NULL, "failed to open a connection %u\n", GetLastError());
+
+    req = WinHttpOpenRequest(con, getW, multiauthW, NULL, NULL, NULL, 0);
+    ok(req != NULL, "failed to open a request %u\n", GetLastError());
+
+    ret = WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                             WINHTTP_NO_REQUEST_DATA,0, 0, 0 );
+    ok(ret, "expected success\n");
+
+    ret = WinHttpReceiveResponse(req, NULL);
+    ok(ret, "expected success\n");
+
+    supported = first = target = 0xdeadbeef;
+    ret = WinHttpQueryAuthSchemes(req, &supported, &first, &target);
+    ok(ret, "expected success\n");
+    ok(supported == (WINHTTP_AUTH_SCHEME_BASIC | WINHTTP_AUTH_SCHEME_NTLM), "got %x\n", supported);
+    ok(target == WINHTTP_AUTH_TARGET_SERVER, "got %x\n", target);
+    ok(first == WINHTTP_AUTH_SCHEME_BASIC, "got %x\n", first);
+
+    WinHttpCloseHandle(req);
+    WinHttpCloseHandle(con);
+    WinHttpCloseHandle(ses);
+}
+
+static void test_large_data_authentication(int port)
+{
+    static const WCHAR largeauthW[] = {'/','l','a','r','g','e','a','u','t','h',0};
+    static const WCHAR getW[] = {'G','E','T',0};
+    static WCHAR userW[] = {'u','s','e','r',0};
+    static WCHAR passW[] = {'p','w','d',0};
+    HINTERNET ses, con, req;
+    DWORD status, size;
+    BOOL ret;
+
+    ses = WinHttpOpen(test_useragent, WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
+    ok(ses != NULL, "failed to open session %u\n", GetLastError());
+
+    con = WinHttpConnect(ses, localhostW, port, 0);
+    ok(con != NULL, "failed to open a connection %u\n", GetLastError());
+
+    req = WinHttpOpenRequest(con, getW, largeauthW, NULL, NULL, NULL, 0);
+    ok(req != NULL, "failed to open a request %u\n", GetLastError());
+
+    ret = WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    ok(ret, "expected success\n");
+
+    ret = WinHttpReceiveResponse(req, NULL);
+    ok(ret, "expected success\n");
+
+    size = sizeof(status);
+    ret = WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL,
+                              &status, &size, NULL);
+    ok(ret, "expected success\n");
+    ok(status == HTTP_STATUS_DENIED, "got %d\n", status);
+
+    ret = WinHttpSetCredentials(req, WINHTTP_AUTH_TARGET_SERVER, WINHTTP_AUTH_SCHEME_NTLM, userW, passW, NULL);
+    ok(ret, "expected success\n");
+
+    ret = WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    ok(ret, "expected success %d\n", GetLastError());
+
+    ret = WinHttpReceiveResponse(req, NULL);
+    ok(ret, "expected success\n");
+
+    size = sizeof(status);
+    ret = WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL,
+                              &status, &size, NULL);
+    ok(ret, "expected success\n");
+    ok(status == HTTP_STATUS_OK, "got %d\n", status);
 
     WinHttpCloseHandle(req);
     WinHttpCloseHandle(con);
@@ -4303,6 +4424,8 @@ START_TEST (winhttp)
     test_head_request(si.port);
     test_not_modified(si.port);
     test_basic_authentication(si.port);
+    test_multi_authentication(si.port);
+    test_large_data_authentication(si.port);
     test_bad_header(si.port);
     test_multiple_reads(si.port);
     test_cookies(si.port);

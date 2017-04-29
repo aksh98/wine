@@ -7562,7 +7562,7 @@ msgstr ""
 msgid "Inserts the contents of the clipboard into your document."
 msgstr "Insereix el contingut del porta-retalls al vostre document."
 
-#: oledlg.rc:48
+#: oledlg.rc:48 regedit.rc:397
 msgid "Unknown Type"
 msgstr "Tipus desconegut"
 
@@ -12219,6 +12219,12 @@ msgstr ""
 #: regedit.rc:396
 msgid "regedit: Unable to delete the registry class '%1'.\n"
 msgstr "regedit: No s'ha pogut suprimir la classe de registre '%1'.\n"
+
+#: regedit.rc:398
+#, fuzzy
+#| msgid "regedit: The line '%1' was not recognized.\n"
+msgid "regedit: The line contains invalid syntax.\n"
+msgstr "regedit: No s'ha reconegut la línia '%1'.\n"
 
 #: regedit.rc:163
 msgid "Quits the registry editor"

@@ -465,6 +465,7 @@ AC_CHECK_HEADERS(\
 	stropts.h \
 	sys/asoundlib.h \
 	sys/attr.h \
+	sys/auxv.h \
 	sys/cdio.h \
 	sys/elf32.h \
 	sys/epoll.h \
@@ -677,6 +678,7 @@ AC_SUBST(DLLFLAGS,"-D_REENTRANT")
 AC_SUBST(LDRPATH_INSTALL,"")
 AC_SUBST(LDRPATH_LOCAL,"")
 AC_SUBST(LDEXECFLAGS,"")
+AC_SUBST(WINELOADER_LDFLAGS,"")
 LIBEXT="so"
 DLLEXT=".so"
 IMPLIBEXT="def"
@@ -735,9 +737,9 @@ case $host_os in
     AC_SUBST(APPLICATIONSERVICES_LIBS,"-framework ApplicationServices")
     AC_SUBST(CORESERVICES_LIBS,"-framework CoreServices")
     AC_SUBST(APPKIT_LIBS,"-framework AppKit")
-    LDEXECFLAGS="-image_base 0x7bf00000 -Wl,-pagezero_size,0x1000,-segaddr,WINE_DOS,0x00001000,-segaddr,WINE_SHAREDHEAP,0x7f000000,-sectcreate,__TEXT,__info_plist,wine_info.plist"
+    WINELOADER_LDFLAGS="-image_base 0x7bf00000 -Wl,-pagezero_size,0x1000,-segaddr,WINE_DOS,0x00001000,-segaddr,WINE_SHAREDHEAP,0x7f000000,-sectcreate,__TEXT,__info_plist,wine_info.plist"
     WINE_TRY_CFLAGS([-Wl,-no_pie],
-                    [LDEXECFLAGS="-Wl,-no_pie $LDEXECFLAGS"])
+                    [WINELOADER_LDFLAGS="-Wl,-no_pie $WINELOADER_LDFLAGS"])
     if test "$ac_cv_header_DiskArbitration_DiskArbitration_h" = "yes"
     then
         dnl DiskArbitration API is not public on Darwin < 8.0, use it only if header found
@@ -846,19 +848,17 @@ case $host_os in
 
   linux-android*)
     DLLFLAGS="$DLLFLAGS -fPIC"
+    LDEXECFLAGS="-Wl,-pie"
     WINE_TRY_CFLAGS([-fPIC -Wl,--export-dynamic],
-                    [LDEXECFLAGS="-Wl,--export-dynamic"])
+                    [WINELOADER_LDFLAGS="-Wl,--export-dynamic"])
     WINE_TRY_CFLAGS([-fPIC -Wl,--rpath,\$ORIGIN/../lib],
                     [LDRPATH_INSTALL="-Wl,--rpath,\\\$\$ORIGIN/\`\$(MAKEDEP) -R \${bindir} \${libdir}\`"
                      LDRPATH_LOCAL="-Wl,--rpath,\\\$\$ORIGIN/\$(top_builddir)/libs/wine"],
         [WINE_TRY_CFLAGS([-fPIC -Wl,-R,\$ORIGIN/../lib],
                          [LDRPATH_INSTALL="-Wl,-R,\\\$\$ORIGIN/\`\$(MAKEDEP) -R \${bindir} \${libdir}\`"
                           LDRPATH_LOCAL="-Wl,-R,\\\$\$ORIGIN/\$(top_builddir)/libs/wine"])])
-
     WINE_TRY_CFLAGS([-Wl,--enable-new-dtags],
                     [LDRPATH_INSTALL="$LDRPATH_INSTALL -Wl,--enable-new-dtags"])
-    WINE_TRY_CFLAGS([-Wl,-pie],
-                    [LDRPATH_INSTALL="$LDRPATH_INSTALL -Wl,-pie"])
 
     AC_SUBST(LIBWINE_SHAREDLIB,"libwine.so")
     AC_SUBST(LIBWINE_INSTALL_LIB,"libwine.so")
@@ -867,7 +867,6 @@ case $host_os in
 
   *)
     DLLFLAGS="$DLLFLAGS -fPIC"
-    LDEXECFLAGS=""
     AC_CACHE_CHECK([whether we can build a GNU style ELF dll], ac_cv_c_dll_gnuelf,
         [WINE_TRY_SHLIB_FLAGS([-fPIC -shared -Wl,-Bsymbolic],
                               ac_cv_c_dll_gnuelf="yes",ac_cv_c_dll_gnuelf="no")])
@@ -885,7 +884,7 @@ case $host_os in
       rm -f conftest.map
 
       WINE_TRY_CFLAGS([-fPIC -Wl,--export-dynamic],
-                      [LDEXECFLAGS="-Wl,--export-dynamic"])
+                      [WINELOADER_LDFLAGS="-Wl,--export-dynamic"])
 
       WINE_TRY_CFLAGS([-fPIC -Wl,--rpath,\$ORIGIN/../lib],
                       [LDRPATH_INSTALL="-Wl,--rpath,\\\$\$ORIGIN/\`\$(MAKEDEP) -R \${bindir} \${libdir}\`"
@@ -901,13 +900,13 @@ case $host_os in
         *i[[3456789]]86* | x86_64)
           WINE_TRY_CFLAGS([-Wl,-Ttext-segment=0x7bc00000],
                           [case $host_os in
-                           freebsd* | kfreebsd*-gnu) LDEXECFLAGS="$LDEXECFLAGS -Wl,-Ttext-segment=0x60000000" ;;
-                           *) LDEXECFLAGS="$LDEXECFLAGS -Wl,-Ttext-segment=0x7c000000" ;;
+                           freebsd* | kfreebsd*-gnu) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,-Ttext-segment=0x60000000" ;;
+                           *) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,-Ttext-segment=0x7c000000" ;;
                            esac],
                           [WINE_TRY_CFLAGS([-Wl,--section-start,.interp=0x7c000400],
                                            [case $host_os in
-                                              freebsd* | kfreebsd*-gnu) LDEXECFLAGS="$LDEXECFLAGS -Wl,--section-start,.interp=0x60000400" ;;
-                                              *) LDEXECFLAGS="$LDEXECFLAGS -Wl,--section-start,.interp=0x7c000400" ;;
+                                              freebsd* | kfreebsd*-gnu) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,--section-start,.interp=0x60000400" ;;
+                                              *) WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,--section-start,.interp=0x7c000400" ;;
                                            esac])
                            AC_PATH_PROG(PRELINK, prelink, false, [/sbin /usr/sbin $PATH])
                            if test "x$PRELINK" = xfalse
@@ -915,7 +914,7 @@ case $host_os in
                                WINE_WARNING([prelink not found and linker does not support relocation, base address of core dlls won't be set correctly.])
                            fi])
           WINE_TRY_CFLAGS([-Wl,-z,max-page-size=0x1000],
-                          [LDEXECFLAGS="$LDEXECFLAGS -Wl,-z,max-page-size=0x1000"])
+                          [WINELOADER_LDFLAGS="$WINELOADER_LDFLAGS -Wl,-z,max-page-size=0x1000"])
           ;;
       esac
 
@@ -1142,14 +1141,14 @@ This probably prevents linking to OpenGL. Try deleting the file and restarting c
 		     $X_LIBS -lm $X_EXTRA_LIBS)
         if test "x$with_glu" != "xno"
         then
-            AC_CHECK_LIB(GLU,gluLookAt,[:],,[$OPENGL_LIBS $X_LIBS -lm $X_EXTRA_LIBS])
-            WINE_NOTICE_WITH(glu,[test "x$ac_cv_lib_GLU_gluLookAt" != xyes],
+            WINE_CHECK_SONAME(GLU,gluLookAt,,,[$OPENGL_LIBS $X_LIBS -lm $X_EXTRA_LIBS])
+            WINE_NOTICE_WITH(glu,[test "x$ac_cv_lib_soname_GLU" = "x"],
                              [libGLU ${notice_platform}development files not found, GLU won't be supported.])
         fi
 
         if test "x$with_osmesa" != "xno"
         then
-            WINE_CHECK_SONAME(OSMesa,glAccum,,,[$X_LIBS -lm $X_EXTRA_LIBS])
+            WINE_CHECK_SONAME(OSMesa,OSMesaGetProcAddress,,,[$X_LIBS -lm $X_EXTRA_LIBS])
             WINE_NOTICE_WITH(osmesa,[test "x$ac_cv_lib_soname_OSMesa" = "x"],
                              [libOSMesa ${notice_platform}development files not found (or too old), OpenGL rendering in bitmaps won't be supported.])
         fi
@@ -1166,8 +1165,6 @@ WINE_ERROR_WITH(x,[test "x$X_LIBS" = "x"],[X ${notice_platform}development files
 without X support, which probably isn't what you want. You will need
 to install ${notice_platform}development packages of Xlib/Xfree86 at the very least.],
 [enable_winex11_drv])
-
-test "x$ac_cv_lib_GLU_gluLookAt" != xyes && enable_glu32=${enable_glu32:-no}
 
 dnl **** Check for OpenCL ****
 if test "$ac_cv_header_CL_cl_h" = "yes"
@@ -1968,7 +1965,6 @@ case $build_os in
 esac
 
 case $host_os in
-  linux-android*) ;;
   linux*)
     case $host_cpu in
       *i[[3456789]]86*|x86_64*)
@@ -2014,6 +2010,7 @@ AC_CHECK_FUNCS(\
 	futimes \
 	futimesat \
 	getattrlist \
+	getauxval \
 	getopt_long_only \
 	getpwuid \
 	gettimeofday \
@@ -3249,6 +3246,7 @@ WINE_CONFIG_DLL(msxml3,,[clean])
 WINE_CONFIG_TEST(dlls/msxml3/tests,[clean])
 WINE_CONFIG_DLL(msxml4,,[clean])
 WINE_CONFIG_DLL(msxml6,,[clean])
+WINE_CONFIG_DLL(mtxdm)
 WINE_CONFIG_DLL(ncrypt)
 WINE_CONFIG_DLL(nddeapi,,[implib])
 WINE_CONFIG_DLL(ndis.sys)
@@ -3519,7 +3517,8 @@ WINE_CONFIG_DLL(wmiutils,,[clean])
 WINE_CONFIG_TEST(dlls/wmiutils/tests)
 WINE_CONFIG_DLL(wmp,,[clean])
 WINE_CONFIG_TEST(dlls/wmp/tests)
-WINE_CONFIG_DLL(wmvcore)
+WINE_CONFIG_DLL(wmvcore,,[implib])
+WINE_CONFIG_TEST(dlls/wmvcore/tests)
 WINE_CONFIG_DLL(wnaspi32,,[implib])
 WINE_CONFIG_DLL(wow32,enable_win16,[implib])
 WINE_CONFIG_DLL(wpc,,[clean])
@@ -3527,6 +3526,8 @@ WINE_CONFIG_TEST(dlls/wpc/tests)
 WINE_CONFIG_DLL(wpcap)
 WINE_CONFIG_DLL(ws2_32,,[implib])
 WINE_CONFIG_TEST(dlls/ws2_32/tests)
+WINE_CONFIG_DLL(wsdapi,,[implib])
+WINE_CONFIG_TEST(dlls/wsdapi/tests)
 WINE_CONFIG_DLL(wshom.ocx,,[clean])
 WINE_CONFIG_TEST(dlls/wshom.ocx/tests,[clean])
 WINE_CONFIG_DLL(wsnmp32,,[implib])

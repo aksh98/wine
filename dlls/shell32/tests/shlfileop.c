@@ -21,10 +21,12 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#define COBJMACROS
 #define WINE_NOWINSOCK
 #include <windows.h>
 #include "shellapi.h"
 #include "shlobj.h"
+#include "commoncontrols.h"
 
 #include "wine/test.h"
 
@@ -315,6 +317,40 @@ static void test_get_file_info(void)
     ok(shfi.iIcon != 0xdeadbeef, "iIcon was expected to change\n");
 }
 
+static void check_icon_size( HICON icon, DWORD flags )
+{
+    ICONINFO info;
+    BITMAP bm;
+    SIZE list_size, metrics_size;
+    IImageList *list;
+
+    GetIconInfo( icon, &info );
+    GetObjectW( info.hbmColor, sizeof(bm), &bm );
+
+    SHGetImageList( (flags & SHGFI_SMALLICON) ? SHIL_SMALL : SHIL_LARGE,
+                    &IID_IImageList, (void **)&list );
+    IImageList_GetIconSize( list, &list_size.cx, &list_size.cy );
+    IImageList_Release( list );
+
+    metrics_size.cx = GetSystemMetrics( (flags & SHGFI_SMALLICON) ? SM_CXSMICON : SM_CXICON );
+    metrics_size.cy = GetSystemMetrics( (flags & SHGFI_SMALLICON) ? SM_CYSMICON : SM_CYICON );
+
+
+    if (flags & SHGFI_SHELLICONSIZE)
+    {
+        todo_wine_if(list_size.cx != metrics_size.cx)
+        {
+            ok( bm.bmWidth == list_size.cx, "got %d expected %d\n", bm.bmWidth, list_size.cx );
+            ok( bm.bmHeight == list_size.cy, "got %d expected %d\n", bm.bmHeight, list_size.cy );
+        }
+    }
+    else
+    {
+        ok( bm.bmWidth == metrics_size.cx, "got %d expected %d\n", bm.bmWidth, metrics_size.cx );
+        ok( bm.bmHeight == metrics_size.cy, "got %d expected %d\n", bm.bmHeight, metrics_size.cy );
+    }
+}
+
 static void test_get_file_info_iconlist(void)
 {
     /* Test retrieving a handle to the system image list, and
@@ -325,6 +361,8 @@ static void test_get_file_info_iconlist(void)
     LPITEMIDLIST pidList;
     SHFILEINFOA shInfoa;
     SHFILEINFOW shInfow;
+    IImageList *small_list, *large_list;
+    ULONG start_refs, refs;
 
     hr = SHGetSpecialFolderLocation(NULL, CSIDL_DESKTOP, &pidList);
     if (FAILED(hr)) {
@@ -332,11 +370,22 @@ static void test_get_file_info_iconlist(void)
          return;
     }
 
+    SHGetImageList( SHIL_LARGE, &IID_IImageList, (void **)&large_list );
+    SHGetImageList( SHIL_SMALL, &IID_IImageList, (void **)&small_list );
+
+    start_refs = IImageList_AddRef( small_list );
+    IImageList_Release( small_list );
+
     memset(&shInfoa, 0xcf, sizeof(shInfoa));
     hSysImageList = (HIMAGELIST) SHGetFileInfoA((const char *)pidList, 0,
             &shInfoa, sizeof(shInfoa),
 	    SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_PIDL);
-    ok((hSysImageList != INVALID_HANDLE_VALUE) && (hSysImageList > (HIMAGELIST) 0xffff), "Can't get handle for CSIDL_DESKTOP imagelist\n");
+    ok(hSysImageList == (HIMAGELIST)small_list, "got %p expect %p\n", hSysImageList, small_list);
+    refs = IImageList_AddRef( small_list );
+    IImageList_Release( small_list );
+    ok( refs == start_refs + 1 ||
+        broken( refs == start_refs ), /* XP and 2003 */
+        "got %d, start_refs %d\n", refs, start_refs );
     todo_wine ok(shInfoa.hIcon == 0, "SHGetFileInfoA(CSIDL_DESKTOP, SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_PIDL) did not clear hIcon\n");
     todo_wine ok(shInfoa.szTypeName[0] == 0, "SHGetFileInfoA(CSIDL_DESKTOP, SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_PIDL) did not clear szTypeName[0]\n");
     ok(shInfoa.iIcon != 0xcfcfcfcf, "SHGetFileInfoA(CSIDL_DESKTOP, SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_PIDL) should set iIcon\n");
@@ -344,7 +393,7 @@ static void test_get_file_info_iconlist(void)
        shInfoa.dwAttributes ==  0 || /* Vista */
        broken(shInfoa.dwAttributes != 0xcfcfcfcf), /* NT4 doesn't clear but sets this field */
        "SHGetFileInfoA(CSIDL_DESKTOP, SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_PIDL), unexpected dwAttributes\n");
-    CloseHandle(hSysImageList);
+    /* Don't release hSysImageList here (and in similar places below) because of the broken reference behaviour of XP and 2003. */
 
     if (!pSHGetFileInfoW)
     {
@@ -362,20 +411,19 @@ static void test_get_file_info_iconlist(void)
         win_skip("SHGetFileInfoW is not implemented\n");
         return;
     }
-    ok((hSysImageList != INVALID_HANDLE_VALUE) && (hSysImageList > (HIMAGELIST) 0xffff), "Can't get handle for CSIDL_DESKTOP imagelist\n");
+    ok(hSysImageList == (HIMAGELIST)small_list, "got %p expect %p\n", hSysImageList, small_list);
     todo_wine ok(shInfow.hIcon == 0, "SHGetFileInfoW(CSIDL_DESKTOP, SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_PIDL) did not clear hIcon\n");
     ok(shInfow.szTypeName[0] == 0, "SHGetFileInfoW(CSIDL_DESKTOP, SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_PIDL) did not clear szTypeName[0]\n");
     ok(shInfow.iIcon != 0xcfcfcfcf, "SHGetFileInfoW(CSIDL_DESKTOP, SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_PIDL) should set iIcon\n");
     ok(shInfow.dwAttributes == 0xcfcfcfcf ||
        shInfoa.dwAttributes ==  0, /* Vista */
        "SHGetFileInfoW(CSIDL_DESKTOP, SHGFI_SYSICONINDEX|SHGFI_SMALLICON|SHGFI_PIDL) unexpected dwAttributes\n");
-    CloseHandle(hSysImageList);
 
     /* Various suposidly invalid flag testing */
     memset(&shInfow, 0xcf, sizeof(shInfow));
-    hr =  pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
+    hSysImageList = (HIMAGELIST)pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
 	    SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_SMALLICON);
-    ok(hr != 0, "SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_SMALLICON Failed\n");
+    ok(hSysImageList == (HIMAGELIST)small_list, "got %p expect %p\n", hSysImageList, small_list);
     ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
     ok(shInfow.dwAttributes==0xcfcfcfcf ||
        shInfoa.dwAttributes==0, /* Vista */
@@ -386,8 +434,8 @@ static void test_get_file_info_iconlist(void)
 	    SHGFI_ICON|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_SMALLICON);
     ok(hr != 0, " SHGFI_ICON|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_SMALLICON Failed\n");
     ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
-    ok(shInfow.hIcon!=(HICON)0xcfcfcfcf && shInfow.hIcon!=0,"hIcon invalid\n");
-    if (shInfow.hIcon!=(HICON)0xcfcfcfcf) DestroyIcon(shInfow.hIcon);
+    check_icon_size( shInfow.hIcon, SHGFI_SMALLICON );
+    DestroyIcon(shInfow.hIcon);
     todo_wine ok(shInfow.dwAttributes==0,"dwAttributes not set\n");
 
     memset(&shInfow, 0xcf, sizeof(shInfow));
@@ -395,14 +443,14 @@ static void test_get_file_info_iconlist(void)
 	    SHGFI_ICON|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_LARGEICON);
     ok(hr != 0, "SHGFI_ICON|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_LARGEICON Failed\n");
     ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
-    ok(shInfow.hIcon!=(HICON)0xcfcfcfcf && shInfow.hIcon!=0,"hIcon invalid\n");
-    if (shInfow.hIcon != (HICON)0xcfcfcfcf) DestroyIcon(shInfow.hIcon);
+    check_icon_size( shInfow.hIcon, SHGFI_LARGEICON );
+    DestroyIcon( shInfow.hIcon );
     todo_wine ok(shInfow.dwAttributes==0,"dwAttributes not set\n");
 
     memset(&shInfow, 0xcf, sizeof(shInfow));
-    hr = pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
+    hSysImageList = (HIMAGELIST)pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
 	    SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_LARGEICON);
-    ok(hr != 0, "SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_LARGEICON Failed\n");
+    ok(hSysImageList == (HIMAGELIST)large_list, "got %p expect %p\n", hSysImageList, small_list);
     ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
     ok(shInfow.dwAttributes==0xcfcfcfcf ||
        shInfoa.dwAttributes==0, /* Vista */
@@ -430,18 +478,18 @@ static void test_get_file_info_iconlist(void)
     ok(shInfow.dwAttributes==0xcfcfcfcf,"dwAttributes modified\n");
 
     memset(&shInfow, 0xcf, sizeof(shInfow));
-    hr = pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
+    hSysImageList = (HIMAGELIST)pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
 	    SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_SMALLICON|
         SHGFI_ATTRIBUTES);
-    ok(hr != 0, "SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_SMALLICON|SHGFI_ATTRIBUTES Failed\n");
+    ok(hSysImageList == (HIMAGELIST)small_list, "got %p expect %p\n", hSysImageList, small_list);
     ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
     ok(shInfow.dwAttributes!=0xcfcfcfcf,"dwAttributes not set\n");
 
     memset(&shInfow, 0xcf, sizeof(shInfow));
-    hr = pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
+    hSysImageList = (HIMAGELIST)pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
 	    SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_SMALLICON|
         SHGFI_EXETYPE);
-    todo_wine ok(hr != 0, "SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_SMALLICON|SHGFI_EXETYPE Failed\n");
+    todo_wine ok(hSysImageList == (HIMAGELIST)small_list, "got %p expect %p\n", hSysImageList, small_list);
     ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
     ok(shInfow.dwAttributes==0xcfcfcfcf ||
        shInfoa.dwAttributes==0, /* Vista */
@@ -462,17 +510,18 @@ static void test_get_file_info_iconlist(void)
     ok(shInfow.dwAttributes!=0xcfcfcfcf,"dwAttributes not set\n");
 
     memset(&shInfow, 0xcf, sizeof(shInfow));
-    hr = pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
+    hSysImageList = (HIMAGELIST)pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
 	    SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|
         SHGFI_ATTRIBUTES);
+    ok(hSysImageList == (HIMAGELIST)large_list, "got %p expect %p\n", hSysImageList, large_list);
     ok(hr != 0, "SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_ATTRIBUTES Failed\n");
     ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
     ok(shInfow.dwAttributes!=0xcfcfcfcf,"dwAttributes not set\n");
 
     memset(&shInfow, 0xcf, sizeof(shInfow));
-    hr = pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
+    hSysImageList = (HIMAGELIST)pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
         SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_EXETYPE);
-    todo_wine ok(hr != 0, "SHGFI_SYSICONINDEX|SHGFI_USEFILEATTRIBUTES|SHGFI_PIDL|SHGFI_EXETYPE Failed\n");
+    todo_wine ok(hSysImageList == (HIMAGELIST)large_list, "got %p expect %p\n", hSysImageList, large_list);
     ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
     ok(shInfow.dwAttributes==0xcfcfcfcf ||
        shInfoa.dwAttributes==0, /* Vista */
@@ -492,7 +541,25 @@ static void test_get_file_info_iconlist(void)
     todo_wine ok(shInfow.iIcon==0xcfcfcfcf, "Icon Index Modified\n");
     ok(shInfow.dwAttributes!=0xcfcfcfcf,"dwAttributes not set\n");
 
+    memset(&shInfow, 0xcf, sizeof(shInfow));
+    hSysImageList = (HIMAGELIST)pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
+	    SHGFI_SYSICONINDEX|SHGFI_PIDL|SHGFI_SMALLICON|SHGFI_SHELLICONSIZE|SHGFI_ICON);
+    ok(hSysImageList == (HIMAGELIST)small_list, "got %p expect %p\n", hSysImageList, small_list);
+    ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
+    check_icon_size( shInfow.hIcon, SHGFI_SMALLICON | SHGFI_SHELLICONSIZE );
+    DestroyIcon( shInfow.hIcon );
+
+    memset(&shInfow, 0xcf, sizeof(shInfow));
+    hSysImageList = (HIMAGELIST)pSHGetFileInfoW((const WCHAR *)pidList, 0, &shInfow, sizeof(shInfow),
+	    SHGFI_SYSICONINDEX|SHGFI_PIDL|SHGFI_SHELLICONSIZE|SHGFI_ICON);
+    ok(hSysImageList == (HIMAGELIST)large_list, "got %p expect %p\n", hSysImageList, small_list);
+    ok(shInfow.iIcon!=0xcfcfcfcf, "Icon Index Missing\n");
+    check_icon_size( shInfow.hIcon, SHGFI_LARGEICON | SHGFI_SHELLICONSIZE );
+    DestroyIcon( shInfow.hIcon );
+
     ILFree(pidList);
+    IImageList_Release( small_list );
+    IImageList_Release( large_list );
 }
 
 

@@ -135,26 +135,17 @@ void wined3d_buffer_invalidate_location(struct wined3d_buffer *buffer, DWORD loc
 /* Context activation is done by the caller. */
 static void buffer_bind(struct wined3d_buffer *buffer, struct wined3d_context *context)
 {
-    const struct wined3d_gl_info *gl_info = context->gl_info;
-
-    if (buffer->buffer_type_hint == GL_ELEMENT_ARRAY_BUFFER)
-        context_invalidate_state(context, STATE_INDEXBUFFER);
-
-    GL_EXTCALL(glBindBuffer(buffer->buffer_type_hint, buffer->buffer_object));
+    context_bind_bo(context, buffer->buffer_type_hint, buffer->buffer_object);
 }
 
 /* Context activation is done by the caller. */
-static void buffer_destroy_buffer_object(struct wined3d_buffer *buffer, const struct wined3d_context *context)
+static void buffer_destroy_buffer_object(struct wined3d_buffer *buffer, struct wined3d_context *context)
 {
     const struct wined3d_gl_info *gl_info = context->gl_info;
     struct wined3d_resource *resource = &buffer->resource;
 
     if (!buffer->buffer_object)
         return;
-
-    GL_EXTCALL(glDeleteBuffers(1, &buffer->buffer_object));
-    checkGLcall("glDeleteBuffers");
-    buffer->buffer_object = 0;
 
     /* The stream source state handler might have read the memory of the
      * vertex buffer already and got the memory in the vbo which is not
@@ -177,8 +168,22 @@ static void buffer_destroy_buffer_object(struct wined3d_buffer *buffer, const st
             device_invalidate_state(resource->device, STATE_CONSTANT_BUFFER(WINED3D_SHADER_TYPE_COMPUTE));
         }
         if (buffer->bind_flags & WINED3D_BIND_STREAM_OUTPUT)
+        {
             device_invalidate_state(resource->device, STATE_STREAM_OUTPUT);
+            if (context->transform_feedback_active)
+            {
+                /* We have to make sure that transform feedback is not active
+                 * when deleting a potentially bound transform feedback buffer.
+                 * This may happen when the device is being destroyed. */
+                WARN("Deleting buffer object for buffer %p, disabling transform feedback.\n", buffer);
+                context_end_transform_feedback(context);
+            }
+        }
     }
+
+    GL_EXTCALL(glDeleteBuffers(1, &buffer->buffer_object));
+    checkGLcall("glDeleteBuffers");
+    buffer->buffer_object = 0;
 
     if (buffer->query)
     {
@@ -1004,14 +1009,6 @@ static HRESULT wined3d_buffer_map(struct wined3d_buffer *buffer, UINT offset, UI
 
     TRACE("buffer %p, offset %u, size %u, data %p, flags %#x.\n", buffer, offset, size, data, flags);
 
-    /* Filter redundant WINED3D_MAP_DISCARD maps. The 3DMark2001 multitexture
-     * fill rate test seems to depend on this. When we map a buffer with
-     * GL_MAP_INVALIDATE_BUFFER_BIT, the driver is free to discard the
-     * previous contents of the buffer. The r600g driver only does this when
-     * the buffer is currently in use, while the proprietary NVIDIA driver
-     * appears to do this unconditionally. */
-    if (buffer->flags & WINED3D_BUFFER_DISCARD)
-        flags &= ~WINED3D_MAP_DISCARD;
     count = ++buffer->resource.map_count;
 
     if (buffer->buffer_object)
@@ -1063,6 +1060,16 @@ static HRESULT wined3d_buffer_map(struct wined3d_buffer *buffer, UINT offset, UI
             if (count == 1)
             {
                 buffer_bind(buffer, context);
+
+                /* Filter redundant WINED3D_MAP_DISCARD maps. The 3DMark2001
+                 * multitexture fill rate test seems to depend on this. When
+                 * we map a buffer with GL_MAP_INVALIDATE_BUFFER_BIT, the
+                 * driver is free to discard the previous contents of the
+                 * buffer. The r600g driver only does this when the buffer is
+                 * currently in use, while the proprietary NVIDIA driver
+                 * appears to do this unconditionally. */
+                if (buffer->flags & WINED3D_BUFFER_DISCARD)
+                    flags &= ~WINED3D_MAP_DISCARD;
 
                 if (gl_info->supported[ARB_MAP_BUFFER_RANGE])
                 {
@@ -1195,7 +1202,6 @@ HRESULT wined3d_buffer_copy(struct wined3d_buffer *dst_buffer, unsigned int dst_
     struct wined3d_device *device;
     BYTE *dst_ptr, *src_ptr;
     DWORD dst_location;
-    HRESULT hr;
 
     buffer_mark_used(dst_buffer);
     buffer_mark_used(src_buffer);
@@ -1206,7 +1212,10 @@ HRESULT wined3d_buffer_copy(struct wined3d_buffer *dst_buffer, unsigned int dst_
     gl_info = context->gl_info;
 
     dst_location = wined3d_buffer_get_memory(dst_buffer, &dst, dst_buffer->locations);
+    dst.addr += dst_offset;
+
     wined3d_buffer_get_memory(src_buffer, &src, src_buffer->locations);
+    src.addr += src_offset;
 
     if (dst.buffer_object && src.buffer_object)
     {
@@ -1220,41 +1229,30 @@ HRESULT wined3d_buffer_copy(struct wined3d_buffer *dst_buffer, unsigned int dst_
         }
         else
         {
-            if (FAILED(hr = wined3d_buffer_map(dst_buffer, dst_offset, size, &dst_ptr, 0)))
-            {
-                WARN("Failed to map dst_buffer, hr %#x.\n", hr);
-                context_release(context);
-                return WINED3DERR_INVALIDCALL;
-            }
-            if (FAILED(hr = wined3d_buffer_map(src_buffer, src_offset, size, &src_ptr, WINED3D_MAP_READONLY)))
-            {
-                WARN("Failed to map src_buffer, hr %#x.\n", hr);
-                wined3d_buffer_unmap(dst_buffer);
-                context_release(context);
-                return WINED3DERR_INVALIDCALL;
-            }
+            src_ptr = context_map_bo_address(context, &src, size, src_buffer->buffer_type_hint, WINED3D_MAP_READONLY);
+            dst_ptr = context_map_bo_address(context, &dst, size, dst_buffer->buffer_type_hint, 0);
 
             memcpy(dst_ptr, src_ptr, size);
 
-            wined3d_buffer_unmap(src_buffer);
-            wined3d_buffer_unmap(dst_buffer);
+            context_unmap_bo_address(context, &dst, dst_buffer->buffer_type_hint);
+            context_unmap_bo_address(context, &src, src_buffer->buffer_type_hint);
         }
     }
     else if (!dst.buffer_object && src.buffer_object)
     {
         buffer_bind(src_buffer, context);
-        GL_EXTCALL(glGetBufferSubData(src_buffer->buffer_type_hint, src_offset, size, dst.addr + dst_offset));
+        GL_EXTCALL(glGetBufferSubData(src_buffer->buffer_type_hint, src_offset, size, dst.addr));
         checkGLcall("buffer download");
     }
     else if (dst.buffer_object && !src.buffer_object)
     {
         buffer_bind(dst_buffer, context);
-        GL_EXTCALL(glBufferSubData(dst_buffer->buffer_type_hint, dst_offset, size, src.addr + src_offset));
+        GL_EXTCALL(glBufferSubData(dst_buffer->buffer_type_hint, dst_offset, size, src.addr));
         checkGLcall("buffer upload");
     }
     else
     {
-        memcpy(dst.addr + dst_offset, src.addr + src_offset, size);
+        memcpy(dst.addr, src.addr, size);
     }
 
     wined3d_buffer_invalidate_range(dst_buffer, ~dst_location, dst_offset, size);
